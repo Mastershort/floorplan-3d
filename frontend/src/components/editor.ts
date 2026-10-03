@@ -32,6 +32,8 @@ import {
   FLOOR_MATERIALS,
   FURNITURE_GROUPS,
   ENERGY_DEVICES,
+  DEFAULT_HOLOGRAM,
+  type HologramSettings,
   FURNITURE_SIZE,
   FURNITURE_TYPES,
   canLift,
@@ -2722,7 +2724,33 @@ export class Fp3dEditor extends LitElement {
     if (device)
       return html`<button class="fp3d-btn fp3d-back" @click=${() => this.selectItem("furniture", null)}>‹ ${this.t("tool_energy")}</button>
         ${this.renderFurnitureForm(device)}`;
-    return html`${this.renderSolarList()}${this.renderEnergyDevices()}${this.renderEnergyBalance()}${this.renderSolarProTeaser()}`;
+    return html`${this.renderSolarList()}${this.renderEnergyDevices()}${this.renderEnergyBalance()}${this.renderHologramSettings()}${this.renderSolarProTeaser()}`;
+  }
+
+  /** Energie Pro: which solar field the hologram hangs on, how big it is and where exactly. */
+  private renderHologramSettings() {
+    const fields = this._doc.settings.roof.solar ?? [];
+    if (!fields.length) return nothing;
+    const admin = this.isAdmin;
+    const h = this._doc.settings.roof.hologram ?? DEFAULT_HOLOGRAM;
+    const set = (patch: Partial<HologramSettings>) => this.change((d) => (d.settings.roof.hologram = { ...(d.settings.roof.hologram ?? DEFAULT_HOLOGRAM), ...patch }));
+    const name = (f: SolarField, i: number) => f.name || `${this.t("solar_field")} ${i + 1}`;
+    return html`<section>
+      <h3>◈ ${this.t("holo_settings")}</h3>
+      <p class="fp3d-sub">${this.t("holo_settings_hint")}</p>
+      <div class="fp3d-form">
+        <label class="fp3d-field fp3d-wide"
+          >${this.t("holo_field")}
+          <select ?disabled=${!admin} @change=${(e: Event) => set({ field: (e.target as HTMLSelectElement).value || null })}>
+            <option value="" ?selected=${!h.field}>${this.t("holo_field_auto")}</option>
+            ${fields.map((f, i) => html`<option value=${f.id} ?selected=${f.id === h.field}>${name(f, i)}</option>`)}
+          </select>
+        </label>
+        ${this.num(this.t("holo_size"), h.size, (v) => set({ size: Math.min(3, Math.max(0.3, round(v))) }), 0.1, 0.3)}
+        ${this.num(this.t("holo_right"), h.right, (v) => set({ right: Math.min(30, Math.max(-30, round(v))) }), 0.25)}
+        ${this.num(this.t("holo_up"), h.up, (v) => set({ up: Math.min(30, Math.max(-30, round(v))) }), 0.25)}
+      </div>
+    </section>`;
   }
 
   /** The coming Pro add-on: a picture and what it will do. */

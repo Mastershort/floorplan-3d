@@ -293,6 +293,17 @@ ROOF_WINDOW_SCHEMA = vol.Schema(
     extra=vol.ALLOW_EXTRA,
 )
 
+# Energie Pro: the hologram hangs on a solar field, moved along it and scaled
+HOLOGRAM_SCHEMA = vol.Schema(
+    {
+        vol.Optional("field", default=None): vol.Any(None, _ID),
+        vol.Optional("size", default=1.0): vol.All(vol.Coerce(float), vol.Range(min=0.3, max=3)),
+        vol.Optional("right", default=0.0): vol.All(vol.Coerce(float), vol.Range(min=-30, max=30)),
+        vol.Optional("up", default=0.0): vol.All(vol.Coerce(float), vol.Range(min=-30, max=30)),
+    },
+    extra=vol.ALLOW_EXTRA,
+)
+
 ROOF_SCHEMA = vol.Schema(
     {
         vol.Optional("type", default="none"): vol.In(["none", "flat", "gable", "custom"]),
@@ -302,6 +313,7 @@ ROOF_SCHEMA = vol.Schema(
         vol.Optional("solar", default=list): vol.All([SOLAR_FIELD_SCHEMA], vol.Length(max=32)),
         vol.Optional("strings", default=list): vol.All([SOLAR_STRING_SCHEMA], vol.Length(max=16)),
         vol.Optional("windows", default=list): vol.All([ROOF_WINDOW_SCHEMA], vol.Length(max=32)),
+        vol.Optional("hologram", default=None): vol.Any(None, HOLOGRAM_SCHEMA),
         vol.Optional("pitch", default=35): vol.All(vol.Coerce(float), vol.Range(min=5, max=60)),
         vol.Optional("overhang", default=0.4): vol.All(vol.Coerce(float), vol.Range(min=0, max=2)),
         # gable roof: ridge along the long side (None) or along the short side (terraced houses)

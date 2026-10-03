@@ -93,11 +93,12 @@ test("cables run from the meter through the shared wall and add up where they sh
   const up = eg.find((s) => s.a[0] === 0.5 && s.a[2] === 1.5 && s.b[1] > 2)!;
   assert.equal(up.power, 70);
   assert.ok(segs.some((s) => s.floorId === "og" && s.kind === "consumer"));
-  // exporting: the grid cable flows from the meter to the outside
-  const grid = segs.find((s) => s.kind === "export")!;
-  assert.deepEqual([grid.a[0], grid.a[2]], [0.5, 1.5]);
-  assert.ok(grid.b[0] < -0.24, "leaves through the west wall");
-  assert.equal(grid.power, 300);
+  // exporting: the grid cable flows from the meter through the west wall and on to the street
+  const grid = segs.filter((s) => s.kind === "export");
+  assert.deepEqual([grid[0].a[0], grid[0].a[2]], [0.5, 1.5]);
+  assert.ok(grid[0].b[0] < 0 && grid[0].b[0] > -0.3, "leaves through the west wall");
+  assert.ok(grid[grid.length - 1].b[0] < -2, "ends out at the street");
+  assert.ok(grid.every((s) => s.power === 300));
   // the cable distance grows along the path
   const far = eg.filter((s) => s.a[0] > 4).map((s) => s.dist);
   assert.ok(Math.min(...far) > 3);

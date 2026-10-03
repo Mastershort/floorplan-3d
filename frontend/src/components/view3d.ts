@@ -23,7 +23,12 @@ import {
 } from "../devices.ts";
 import { alertColor, alertEntities, alertSources, alertText, findAlerts, type Alert, type AlertSources } from "../alerts.ts";
 import { iconPath, iconSvg } from "../icons.ts";
-import { deviceSensors, energySummary, fetchSolarDay, fieldLevels, fieldPowers, findConsumers, flowColor, flowSegments, powerSensorFor, readPower, solarCurvePath, type Consumer, type EnergySummary, type SolarDay } from "../energy.ts";
+import { deviceSensors, energySummary, fetchSolarDay, fieldLevels, fieldPowers, findConsumers, flowColor, flowSegments, gridPoint, powerSensorFor, readPower, solarCurvePath, type Consumer, type EnergySummary, type SolarDay } from "../energy.ts";
+import { fieldFace, fieldSize } from "../solar.ts";
+import { DEFAULT_HOLOGRAM } from "../model.ts";
+
+/** The pin at the street end of the grid cable. */
+const GRID_ICON = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13 2 4 14h7l-1 8 9-12h-7z"/></svg>';
 import { STAGE, type Theme } from "../themes.ts";
 import { HEAT_SCALES, heatColor, heatGradient, roomValues, type HeatMode } from "../heatmap.ts";
 import { furnitureName } from "../furniture-names.ts";
@@ -368,7 +373,7 @@ export class Fp3dView3d extends LitElement {
       this.viewer.setFurnishMode(this.furnish);
       this.viewer.setSurfaceGrab(this.surfaceGrab ?? null);
       this.viewer.setFurnishTypes(this.furnishTypes ?? null);
-      this.viewer.setAnchorCallback((x, y, on) => this.placeHolo(x, y, on));
+      this.viewer.setAnchorCallback((x, y, on, scale, facing) => this.placeHolo(x, y, on, scale, facing));
       this.viewer.setFloorStack(this.floorStack);
       this.viewer.setStats(this.showStats);
       this.viewer.setAutoOrbit(this.autoOrbit ? 0.06 : 0);
@@ -489,6 +494,7 @@ export class Fp3dView3d extends LitElement {
     const byDevice = new Map(consumers.filter((c) => c.id !== c.powerEntity).map((c) => [c.id, c.power]));
     this.confirmSet = confirmEntities(hass, b.floors);
     const trail = this.trail ? this.trailNow(hass, b) : [];
+    const pro = hasFeature("energy_pro");
     v.setDevices([
       ...[...deviceMarkers, ...furniture.markers].map((m) => {
         // "without watts" drops the power badge (a plug shows only on / off)
@@ -497,6 +503,8 @@ export class Fp3dView3d extends LitElement {
         const marker = { ...m, power, powerText: power === null ? undefined : formatPower(hass, power), effect: this.dimmed ? false : m.effect };
         return { ...marker, pin: this.showPin(marker) };
       }),
+      // Energie Pro: the street end of the grid cable carries a pin with what comes in or goes out
+      ...(pro && (this.flows ?? this._flows) && !this.dimmed && summary.grid !== null ? [this.gridPin(hass, b, summary.grid)] : []).filter((m): m is NonNullable<typeof m> => !!m),
       // trail spots carry a pin with the time of the motion; the same sensor again stacks its pins
       ...trail.map((p, i) => ({
         id: `trail:${i}`,
@@ -543,8 +551,20 @@ export class Fp3dView3d extends LitElement {
     const batteryPlaced =
       b.floors.flatMap((f) => f.furniture.filter((m) => m.type === "home_battery").map((m) => ({ floorId: f.id, x: m.x, z: m.z })))[0] ??
       (b.energy.battery ? b.floors.flatMap((f) => f.placements.filter((p) => p.entity_id === b.energy.battery).map((p) => ({ floorId: f.id, x: p.x, z: p.z })))[0] : null);
-    const pro = hasFeature("energy_pro");
     const powers = pro ? fieldPowers(hass, b, summary.solar) : null;
+    // the hologram hangs over the middle of the chosen (else the biggest) solar field, moved as set up
+    const holo = b.settings.roof.hologram ?? DEFAULT_HOLOGRAM;
+    const fields = [...(b.settings.roof.solar ?? [])].sort((p, q) => q.rows * q.cols - p.rows * p.cols);
+    const first = pro && summary.solar !== null ? (fields.find((f) => f.id === holo.field) ?? fields[0]) : undefined;
+    const face = first ? fieldFace(b, first) : null;
+    if (first && face) {
+      const [fw, fd] = fieldSize(face, first);
+      const u = first.u + fw / 2 + holo.right;
+      const sv = first.v + fd / 2 + holo.up;
+      const c: [number, number, number] = [face.o[0] + face.eu[0] * u + face.es[0] * sv, face.o[1] + face.eu[1] * u + face.es[1] * sv, face.o[2] + face.eu[2] * u + face.es[2] * sv];
+      const floorId = face.wall?.floorId ?? (face.unbounded ? (b.floors.find((f) => f.elevation === Math.min(...b.floors.map((x) => x.elevation)))?.id ?? b.floors[0].id) : [...b.floors].sort((p, q) => q.elevation - p.elevation)[0].id);
+      v.setAnchor({ p: [c[0] + face.n[0] * 0.05, c[1] + face.n[1] * 0.05, c[2] + face.n[2] * 0.05], n: [face.n[0], face.n[1], face.n[2]], floorId, size: holo.size });
+    } else v.setAnchor(null);
     // the modules live with their production (at night, and without Pro, they rest)
     v.setSolarLevels(powers && !this.dimmed ? fieldLevels(b, powers) : new Map());
     v.setFlows(
@@ -588,6 +608,28 @@ export class Fp3dView3d extends LitElement {
     this.watchSolarDay(solarIds);
   }
 
+  /** The pin at the street: grid import or export right now. */
+  private gridPin(hass: HomeAssistant, b: Building, grid: number) {
+    const g = gridPoint(b);
+    if (!g) return null;
+    const idle = Math.abs(grid) < 5;
+    return {
+      id: "grid",
+      floorId: g.floorId,
+      roomId: null,
+      x: g.end[0],
+      z: g.end[1],
+      y: 0.9,
+      icon: GRID_ICON,
+      name: translate(hass, "holo_grid"),
+      text: idle ? formatPower(hass, 0) : `${translate(hass, grid < 0 ? "energy_grid_export" : "energy_grid_import")} ${formatPower(hass, Math.abs(grid))}`,
+      active: !idle,
+      unavailable: false,
+      glow: null,
+      pin: true,
+    };
+  }
+
   /** Fetch today's solar statistics every five minutes while there are sensors to watch (none: the curve goes). */
   private watchSolarDay(ids: string[]): void {
     const key = ids.join(",");
@@ -608,20 +650,36 @@ export class Fp3dView3d extends LitElement {
     this.holoTimer = setInterval(() => void fetch(), 300000);
   }
 
-  /** Moves the hologram to its anchor on screen (called by the viewer after every frame). */
-  private placeHolo(x: number, y: number, on: boolean): void {
+  /**
+   * Hangs the hologram on its anchor (called by the viewer after every frame): a thin line rises from the
+   * solar field to the card's lower left corner; the card keeps its size in the world and, seen from behind
+   * the field, shows its back (mirrored).
+   */
+  private placeHolo(x: number, y: number, on: boolean, scale: number, facing: boolean): void {
     const el = (this.holoEl ??= this.renderRoot.querySelector<HTMLElement>(".fp3d-holo"));
+    const link = this.renderRoot.querySelector<SVGSVGElement>(".fp3d-holo-link");
     if (!el) return;
     const hidden = !on;
     if (el.hidden !== hidden) el.hidden = hidden;
+    if (link && link.hasAttribute("hidden") !== hidden) link.toggleAttribute("hidden", hidden);
     if (!on) return;
-    // beside its anchor, but never off the stage: it slides left along the edge when the house sits far right
-    const stage = el.offsetParent as HTMLElement | null;
-    const w = el.offsetWidth || 236;
-    const h = el.offsetHeight || 200;
-    const left = Math.max(8, Math.min((stage?.clientWidth ?? Infinity) - w - 8, x + 10));
-    const top = Math.max(8 + h / 2, Math.min((stage?.clientHeight ?? Infinity) - h / 2 - 8, y));
-    el.style.transform = `translate(${Math.round(left)}px, ${Math.round(top)}px) translate(0, -50%)`;
+    const s = scale * 0.8;
+    const dx = 34 * s;
+    const dy = 46 * s;
+    // the card's lower left corner (lower right when it is mirrored) sits up and to the side of the anchor
+    const cx = x + (facing ? dx : -dx);
+    const cy = y - dy;
+    el.style.transform = `translate(${cx.toFixed(1)}px, ${cy.toFixed(1)}px) scale(${(facing ? s : -s).toFixed(3)}, ${s.toFixed(3)}) translate(0, -100%)`;
+    if (link) {
+      const line = link.firstElementChild as SVGLineElement | null;
+      const dot = link.lastElementChild as SVGCircleElement | null;
+      line?.setAttribute("x1", x.toFixed(1));
+      line?.setAttribute("y1", y.toFixed(1));
+      line?.setAttribute("x2", cx.toFixed(1));
+      line?.setAttribute("y2", cy.toFixed(1));
+      dot?.setAttribute("cx", x.toFixed(1));
+      dot?.setAttribute("cy", y.toFixed(1));
+    }
   }
 
   /** Energie Pro: the glass hologram beside the house with the solar and energy balance of the moment. */
@@ -638,7 +696,8 @@ export class Fp3dView3d extends LitElement {
     const autarky = e.consumption !== null && e.consumption > 0 ? Math.round(Math.min(100, Math.max(0, (1 - Math.max(0, e.grid ?? 0) / e.consumption) * 100))) : null;
     const curve = day && day.curve.length > 1 ? solarCurvePath(day.curve, day.peak) : null;
     const nowX = ((new Date().getHours() + new Date().getMinutes() / 60) / 24) * 220;
-    return html`<div class="fp3d-holo ${open ? "" : "fp3d-holo-min"}" hidden role="button" tabindex="0" aria-label=${t("holo_title")} @click=${() => (this._holoOpen = !this._holoOpen)}>
+    return html`<svg class="fp3d-holo-link" hidden aria-hidden="true"><line x1="0" y1="0" x2="0" y2="0" /><circle cx="0" cy="0" r="3" /></svg>
+      <div class="fp3d-holo ${open ? "" : "fp3d-holo-min"}" hidden role="button" tabindex="0" aria-label=${t("holo_title")} @click=${() => (this._holoOpen = !this._holoOpen)}>
       <div class="fp3d-holo-sheen"></div>
       <div class="fp3d-holo-scan"></div>
       <div class="fp3d-holo-body">
@@ -2133,9 +2192,32 @@ export class Fp3dView3d extends LitElement {
         line-height: 1.35;
         text-shadow: 0 0 6px rgba(80, 220, 255, 0.55);
         will-change: transform;
+        transform-origin: 0 0;
       }
-      .fp3d-holo[hidden] {
+      .fp3d-holo[hidden],
+      .fp3d-holo-link[hidden] {
         display: none;
+      }
+      /* the thin line from the solar field up to the card, with a dot on the field */
+      .fp3d-holo-link {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        z-index: 3;
+        pointer-events: none;
+        overflow: visible;
+      }
+      .fp3d-holo-link line {
+        stroke: rgba(160, 240, 255, 0.75);
+        stroke-width: 1.2;
+        filter: drop-shadow(0 0 3px rgba(55, 224, 255, 0.8));
+      }
+      .fp3d-holo-link circle {
+        fill: #cffaff;
+        stroke: rgba(55, 224, 255, 0.8);
+        stroke-width: 2;
+        filter: drop-shadow(0 0 4px rgba(55, 224, 255, 0.9));
       }
       .fp3d-holo-min {
         width: 150px;

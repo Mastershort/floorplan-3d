@@ -8,7 +8,7 @@
 
 import { generateWalls } from "./geometry/walls.ts";
 import type { Building, EnergySettings, Floor, Furniture, Room, SolarField, Vec2 } from "./model.ts";
-import { fieldFace, fieldSize, roofFaces, wallFaces } from "./solar.ts";
+import { fieldFace, fieldSize, roofFaces, topFloor, wallFaces } from "./solar.ts";
 import { powerSensorsOf } from "./devices.ts";
 import { pointInPolygon, signedArea } from "./model.ts";
 import type { HassEntity, HomeAssistant } from "./types.ts";
@@ -460,7 +460,6 @@ export function flowSegments({ building, consumers, summary, battery, fieldPower
   if (!meter) return [];
   const meterFloor = building.floors.find((f) => f.id === meter.floor_id);
   if (!meterFloor) return [];
-  const { wall_exterior: ext, wall_interior: int } = building.settings;
 
   const targets: (Target & { power: number })[] = consumers.map((c) => ({ floorId: c.floorId, x: c.x, z: c.z, kind: (c.wallbox ? "wallbox" : "consumer") as FlowKind, power: c.power }));
   // the battery hangs on the inverter when both stand on one floor (a hybrid inverter), else on the meter
@@ -486,27 +485,13 @@ export function flowSegments({ building, consumers, summary, battery, fieldPower
     kind: s.kind,
   }));
 
-  // grid feed: from outside through the nearest exterior wall to the meter
-  if (summary.grid !== null) {
-    const { walls } = generateWalls(meterFloor.rooms, { exterior: ext, interior: int }, meterFloor.walls ?? []);
-    let best: { q: Vec2; out: Vec2; d: number } | null = null;
-    for (const w of walls) {
-      if (!w.exterior) continue;
-      const dx = w.b[0] - w.a[0];
-      const dz = w.b[1] - w.a[1];
-      const l2 = dx * dx + dz * dz || 1;
-      const t = Math.min(1, Math.max(0, ((meter.x - w.a[0]) * dx + (meter.z - w.a[1]) * dz) / l2));
-      const q: Vec2 = [w.a[0] + dx * t, w.a[1] + dz * t];
-      const d = Math.hypot(meter.x - q[0], meter.z - q[1]);
-      const l = Math.sqrt(l2);
-      if (!best || d < best.d) best = { q, out: [dz / l, -dx / l], d };
-    }
-    if (best) {
-      const far: [number, number, number] = [best.q[0] + best.out[0] * (ext + 1.4), CABLE_Y, best.q[1] + best.out[1] * (ext + 1.4)];
-      const at: [number, number, number] = [meter.x, CABLE_Y, meter.z];
-      const importing = summary.grid >= 0;
-      out.push({ floorId: meterFloor.id, a: importing ? far : at, b: importing ? at : far, dist: 0, power: Math.abs(summary.grid), kind: importing ? "grid" : "export" });
-    }
+  // grid feed: from the street through the nearest exterior wall to the meter
+  const street = summary.grid !== null ? gridPoint(building) : null;
+  if (street) {
+    const importing = summary.grid! >= 0;
+    const route: V3[] = [[street.end[0], CABLE_Y, street.end[1]], [street.wall[0], CABLE_Y, street.wall[1]], [meter.x, CABLE_Y, meter.z]];
+    const pieces = polyline(meterFloor.id, importing ? route : [...route].reverse(), Math.abs(summary.grid!), importing ? "grid" : "export", 0);
+    out.push(...pieces);
   }
   // the battery cable flows towards the meter when discharging
   if (summary.battery !== null && summary.battery > 0) {
@@ -545,6 +530,50 @@ interface DevicePos {
   floorId: string;
   x: number;
   z: number;
+}
+
+/**
+ * Where the grid cable leaves the house and where it ends: through the exterior wall nearest to the meter and on
+ * to the edge of the plot in that direction (the outermost outdoor area, else a few metres out) – the street.
+ */
+export function gridPoint(building: Building): { floorId: string; wall: Vec2; end: Vec2 } | null {
+  const meter = meterPosition(building);
+  const floor = meter ? building.floors.find((f) => f.id === meter.floor_id) : undefined;
+  if (!meter || !floor) return null;
+  const { wall_exterior: ext, wall_interior: int } = building.settings;
+  const { walls } = generateWalls(floor.rooms, { exterior: ext, interior: int }, floor.walls ?? []);
+  let best: { q: Vec2; out: Vec2; d: number } | null = null;
+  for (const w of walls) {
+    if (!w.exterior) continue;
+    const dx = w.b[0] - w.a[0];
+    const dz = w.b[1] - w.a[1];
+    const l2 = dx * dx + dz * dz || 1;
+    const t = Math.min(1, Math.max(0, ((meter.x - w.a[0]) * dx + (meter.z - w.a[1]) * dz) / l2));
+    const q: Vec2 = [w.a[0] + dx * t, w.a[1] + dz * t];
+    const d = Math.hypot(meter.x - q[0], meter.z - q[1]);
+    const l = Math.sqrt(l2);
+    if (!best || d < best.d) best = { q, out: [dz / l, -dx / l], d };
+  }
+  if (!best) return null;
+  const { q, out } = best;
+  // along the way out: the farthest edge of any outdoor area it crosses (the plot's border), at most 15 m
+  let far = 0;
+  for (const area of floor.outdoor ?? []) {
+    const n = area.points.length;
+    for (let i = 0; i < n; i++) {
+      const a = area.points[i];
+      const c = area.points[(i + 1) % n];
+      const ex = c[0] - a[0];
+      const ez = c[1] - a[1];
+      const den = out[0] * ez - out[1] * ex;
+      if (Math.abs(den) < 1e-9) continue;
+      const t = ((a[0] - q[0]) * ez - (a[1] - q[1]) * ex) / den;
+      const u = ((a[0] - q[0]) * out[1] - (a[1] - q[1]) * out[0]) / den;
+      if (t > 0 && u >= 0 && u <= 1) far = Math.max(far, Math.min(15, t));
+    }
+  }
+  const t = far > ext + 1 ? far : ext + 2.5;
+  return { floorId: floor.id, wall: [q[0] + out[0] * (ext / 2 + 0.05), q[1] + out[1] * (ext / 2 + 0.05)], end: [q[0] + out[0] * t, q[1] + out[1] * t] };
 }
 
 /** The first energy device of a type in the plan (where its cables start or end). */
@@ -621,56 +650,13 @@ function polyline(floorId: string, pts: V3[], power: number, kind: FlowKind, dis
   return out;
 }
 
-/** The outer outline of a floor's exterior walls as a graph (nodes just outside the wall faces). */
-function outlineGraph(building: Building, floor: Floor): Graph {
-  const g: Graph = { pos: [], adj: [], rings: new Map() };
-  const { walls } = generateWalls(floor.rooms, { exterior: building.settings.wall_exterior, interior: building.settings.wall_interior }, floor.walls ?? []);
-  const segs: [number, number][] = [];
-  for (const w of walls) {
-    if (!w.exterior || w.free) continue;
-    const dx = w.b[0] - w.a[0];
-    const dz = w.b[1] - w.a[1];
-    const l = Math.hypot(dx, dz) || 1;
-    // the room lies on the left, so the outside is on the right
-    const off = w.right + 0.05;
-    const nx = (dz / l) * off;
-    const nz = (-dx / l) * off;
-    const a = addNode(g, [w.a[0] + nx, w.a[1] + nz]);
-    const b = addNode(g, [w.b[0] + nx, w.b[1] + nz]);
-    link(g, a, b);
-    segs.push([a, b]);
-  }
-  // the walls meet at the corners: ends that lie close together are joined
-  for (let i = 0; i < g.pos.length; i++) {
-    for (let j = i + 1; j < g.pos.length; j++) {
-      const d = Math.hypot(g.pos[i][0] - g.pos[j][0], g.pos[i][1] - g.pos[j][1]);
-      if (d < 0.6 && !g.adj[i].some((e) => e.to === j)) link(g, i, j);
-    }
-  }
-  g.rings.set("outline", segs);
-  return g;
-}
-
-/** The way along the outside of the house from one plan point to another (both are joined to the outline). */
-function outlinePath(building: Building, floor: Floor, from: Vec2, to: Vec2): Vec2[] {
-  const key = `outline:${floor.id}:${from.join(",")}>${to.join(",")}`;
-  let per = routeCache.get(building);
-  if (!per) routeCache.set(building, (per = new Map()));
-  const cached = per.get(key);
-  if (cached) return cached;
-  const g = outlineGraph(building, floor);
-  let path: Vec2[] = [from, to];
-  const na = attach(g, "outline", from);
-  const nb = attach(g, "outline", to);
-  if (na !== null && nb !== null) {
-    const { dist, prev } = dijkstra(g, na);
-    if (Number.isFinite(dist[nb])) {
-      path = [];
-      for (let v = nb; v >= 0; v = prev[v]) path.unshift(g.pos[v]);
-    }
-  }
-  per.set(key, path);
-  return path;
+/** The point of a floor's cable rings (just inside the walls) nearest to a plan point. */
+function nearestRingPoint(building: Building, floor: Floor, p: Vec2): Vec2 {
+  const { wall_exterior: ext, wall_interior: int } = building.settings;
+  const g = buildGraph(floor, ext, int);
+  const room = roomAt(floor, p);
+  const node = room ? attach(g, room.id, p) : null;
+  return node === null ? p : g.pos[node];
 }
 
 /** Pieces of a cable in building coordinates, handed to the floors they run through (vertical runs are split). */
@@ -719,41 +705,36 @@ function solarRoute(building: Building, f: SolarField, power: number, target: De
   const face = fieldFace(building, f, faces);
   const floor = building.floors.find((x) => x.id === target.floorId);
   if (!face || !floor) return [];
-  const [w] = fieldSize(face, f);
+  const [w, d] = fieldSize(face, f);
   const at = (u: number, s: number): V3 => [face.o[0] + face.eu[0] * u + face.es[0] * s, face.o[1] + face.eu[1] * u + face.es[1] * s, face.o[2] + face.eu[2] * u + face.es[2] * s];
   const u = f.u + w / 2;
+  const ground = floor.elevation + CABLE_Y;
   const pts: V3[] = [];
-  let exit: V3;
-  // the height of the run along the outer walls: on the ground for garden and wall fields, just above the
-  // inverter for roof fields (the cable comes down the facade to it)
-  let y = floor.elevation + CABLE_Y;
+  let into: V3;
   if (face.unbounded) {
-    // a garden field: its cable starts under the middle of the field, on the ground
-    const [, d] = fieldSize(face, f);
+    // a garden field: its cable starts under the middle of the field and runs over the ground to the house
     const c = at(u, f.v + d / 2);
-    exit = [c[0], y, c[2]];
-    pts.push(exit);
+    into = [c[0], ground, c[2]];
+    pts.push(into);
   } else if (face.wall) {
     // a wall field: straight down the wall from the field's lower edge
     const bottom = at(u, f.v);
-    exit = [bottom[0], y, bottom[2]];
-    pts.push(bottom, exit);
+    into = [bottom[0], ground, bottom[2]];
+    pts.push(bottom, into);
   } else {
-    // a roof field: from its lower edge down the slope to the eave
-    exit = at(u, 0);
-    pts.push(at(u, f.v), exit);
-    y = floor.elevation + targetY + 0.25;
+    // a roof field: from its lower edge in through the roof to the wall below, and down the wall inside
+    const bottom = at(u, f.v);
+    const top = topFloor(building) ?? floor;
+    const ceiling = Math.max(floor.elevation + 0.5, Math.min(bottom[1] - 0.25, top.elevation + top.height - 0.12));
+    into = [bottom[0], ceiling, bottom[2]];
+    pts.push(bottom);
   }
-  // in to the facade under the eave, down it, along the outside of the house to the point nearest the device
-  const path = outlinePath(building, floor, [exit[0], exit[2]], [target.x, target.z]);
-  const first = path[0];
-  if (first && !face.unbounded && !face.wall) pts.push([first[0], exit[1], first[1]]);
-  for (const p of path) pts.push([p[0], y, p[1]]);
-  // then in through the wall to the device
-  const last = path[path.length - 1];
-  const end: V3 = [target.x, floor.elevation + targetY, target.z];
-  if (last && Math.abs(y - end[1]) > 0.05) pts.push([last[0], end[1], last[1]]);
-  pts.push(end);
+  // to the nearest wall of the device's floor (inside), down to the floor and along the walls to the device
+  const ring = nearestRingPoint(building, floor, [into[0], into[2]]);
+  pts.push([ring[0], into[1], ring[1]]);
+  if (Math.abs(into[1] - ground) > 0.05) pts.push([ring[0], ground, ring[1]]);
+  for (const q of roomPath(building, floor, ring, [target.x, target.z]).slice(1)) pts.push([q[0], ground, q[1]]);
+  pts.push([target.x, floor.elevation + targetY, target.z]);
   return absolutePolyline(building, pts, power, "solar", floor);
 }
 

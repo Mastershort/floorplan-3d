@@ -249,6 +249,8 @@ export interface RoofSettings {
   strings?: SolarString[];
   /** Roof windows on the roof faces. */
   windows?: RoofWindow[];
+  /** Energie Pro: the hologram's place and size. */
+  hologram?: HologramSettings | null;
 }
 
 /**
@@ -298,6 +300,19 @@ export interface SolarField {
  * A roof window on a roof face (u along the eave, v up the slope, in metres, at its lower left corner). Like a
  * window it follows a contact (open or tilted: the sash swings out at the top) and a blind (cover).
  */
+/** Energie Pro: where the hologram hangs – on a solar field, moved along the field and up the slope, scaled. */
+export interface HologramSettings {
+  /** The field it hangs on (null: the biggest one). */
+  field: string | null;
+  /** Size factor (1 = normal). */
+  size: number;
+  /** Offset from the field's middle along the eave (m, + = right) and up the slope (m). */
+  right: number;
+  up: number;
+}
+
+export const DEFAULT_HOLOGRAM: HologramSettings = { field: null, size: 1, right: 0, up: 0 };
+
 export interface RoofWindow {
   id: string;
   face: string;
