@@ -326,6 +326,8 @@ export interface CableRoute {
   floor_id: string;
   points: Vec2[];
   height: number;
+  /** Fixed: its points cannot be moved by accident. */
+  locked?: boolean;
 }
 
 export interface RoofWindow {

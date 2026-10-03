@@ -969,7 +969,8 @@ export class Fp3dEditor extends LitElement {
       }
       if (this._tool === "energy") {
         const pt = target.closest("[data-cable-pt]")?.getAttribute("data-cable-pt");
-        if (pt && this.isAdmin) {
+        const lockedCable = (id: string) => !!this._doc.settings.roof.cables?.find((c) => c.id === id)?.locked;
+        if (pt && this.isAdmin && !lockedCable(pt.slice(0, pt.lastIndexOf(":")))) {
           const i = pt.lastIndexOf(":");
           const id = pt.slice(0, i);
           const index = Number(pt.slice(i + 1));
@@ -986,7 +987,7 @@ export class Fp3dEditor extends LitElement {
           return;
         }
         const line = target.closest("[data-cable-line]")?.getAttribute("data-cable-line");
-        if (line && this.isAdmin) {
+        if (line && this.isAdmin && !lockedCable(line)) {
           // a click on the laid cable puts a new point there and takes it along (piece i lies before point i)
           const index = Number(target.closest("[data-cable-line]")?.getAttribute("data-cable-seg") ?? 0);
           const base = this._doc;
@@ -2478,6 +2479,7 @@ export class Fp3dEditor extends LitElement {
 
   /** The cables in the plan: faint for the automatic ways, solid for laid ones, with points on the picked cable. */
   private renderCables() {
+    if (!hasFeature("energy_pro")) return nothing;
     const all = this.cableSegments();
     if (!all.length) return nothing;
     const segs = all.filter((x) => x.floorId === this._floorId);
@@ -2495,7 +2497,7 @@ export class Fp3dEditor extends LitElement {
           const b = this.toScreen([x.b[0], x.b[2]]);
           return svg`<line x1=${a[0]} y1=${a[1]} x2=${b[0]} y2=${b[1]} />`;
         });
-      if (!(laid && key === sel && laid.floor_id === this._floorId)) return lines.length ? svg`<g class=${cls} data-cable=${key}><g class="fp3d-cable-hit">${lines}</g>${lines}</g>` : nothing;
+      if (!(laid && key === sel && laid.floor_id === this._floorId && !laid.locked)) return lines.length ? svg`<g class=${cls} data-cable=${key}><g class="fp3d-cable-hit">${lines}</g>${lines}</g>` : nothing;
       // the picked laid cable: its points to drag; every piece from device to device takes new points
       const first = mine[0];
       const last = mine[mine.length - 1];
@@ -2539,7 +2541,13 @@ export class Fp3dEditor extends LitElement {
       ${this._cableId
         ? html`<div class="fp3d-actions">
               ${sel
-                ? html`<button class="fp3d-btn" ?disabled=${!admin} @click=${() => this.change((d) => (d.settings.roof.cables = (d.settings.roof.cables ?? []).filter((c) => c.id !== this._cableId)))}>${this.t("cable_auto")}</button>`
+                ? html`<button class="fp3d-btn fp3d-fix" aria-pressed=${!!sel.locked} title=${this.t("fix_hint")} ?disabled=${!admin} @click=${() => this.change((d) => {
+                      const c = d.settings.roof.cables?.find((x) => x.id === sel.id);
+                      if (c) c.locked = !c.locked;
+                    })}>
+                      ${sel.locked ? `🔒 ${this.t("unfix")}` : `🔓 ${this.t("fix")}`}
+                    </button>
+                    <button class="fp3d-btn" ?disabled=${!admin} @click=${() => this.change((d) => (d.settings.roof.cables = (d.settings.roof.cables ?? []).filter((c) => c.id !== this._cableId)))}>${this.t("cable_auto")}</button>`
                 : html`<button class="fp3d-btn fp3d-primary" ?disabled=${!admin || !this._floorId} @click=${() => this.layCable(this._cableId!)}>${this.t("cable_lay")}</button>`}
             </div>
             ${sel
@@ -2949,7 +2957,8 @@ export class Fp3dEditor extends LitElement {
     if (device)
       return html`<button class="fp3d-btn fp3d-back" @click=${() => this.selectItem("furniture", null)}>‹ ${this.t("tool_energy")}</button>
         ${this.renderFurnitureForm(device)}`;
-    return html`${this.renderSolarList()}${this.renderEnergyDevices()}${this.renderEnergyBalance()}${this.renderCableSettings()}${this.renderHologramSettings()}${this.renderSolarProTeaser()}`;
+    const pro = hasFeature("energy_pro");
+    return html`${this.renderSolarList()}${this.renderEnergyDevices()}${this.renderEnergyBalance()}${pro ? this.renderCableSettings() : nothing}${pro ? this.renderHologramSettings() : nothing}${this.renderSolarProTeaser()}`;
   }
 
   /** Energie Pro: which solar field the hologram hangs on, how big it is and where exactly. */

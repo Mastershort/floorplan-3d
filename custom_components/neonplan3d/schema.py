@@ -302,6 +302,7 @@ CABLE_SCHEMA = vol.Schema(
         vol.Required("floor_id"): _ID,
         vol.Required("points"): vol.All([_POINT], vol.Length(min=1, max=60)),
         vol.Optional("height", default=0.03): vol.All(vol.Coerce(float), vol.Range(min=0, max=30)),
+        vol.Optional("locked", default=False): bool,
     },
     extra=vol.ALLOW_EXTRA,
 )
