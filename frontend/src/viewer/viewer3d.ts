@@ -52,7 +52,8 @@ import { pushCameraModel, pushPackLamp, screenRect, pushFridgeDoors } from "./fu
 import { mountBase, packItem, setPacks, type FurniturePack } from "../packs.ts";
 import { withVehicles } from "../parking.ts";
 import { buildRoof, type RoofWindowState } from "./roof.ts";
-import { GROUND, groundFace, groundFloor, wallFaces } from "../solar.ts";
+import { GROUND, groundFace, groundFloor, roofFaces, wallFaces } from "../solar.ts";
+import { buildSolarLive, solarLiveMaterial, writeSolarLevels, type SolarLive } from "./solar-live.ts";
 import { lineBlending, themed, themeIndex, type Theme, type ThemeUniform } from "./theme.ts";
 
 export type { Theme } from "./theme.ts";
@@ -301,6 +302,8 @@ interface FloorMaterials {
   glass: MeshBasicMaterial;
   blinds: MeshBasicMaterial;
   flow: MeshBasicMaterial;
+  /** Energie Pro: the living overlay of the solar fields on this floor (garden, walls). */
+  solarLive: MeshBasicMaterial;
   lamps: MeshBasicMaterial;
   halos: PointsMaterial;
   cones: MeshBasicMaterial;
@@ -323,6 +326,9 @@ interface FloorView {
   glassMesh: Mesh;
   blindsMesh: Mesh;
   flowMesh: Mesh;
+  /** The living solar overlay of this floor's fields, if it has any. */
+  solarMesh: Mesh | null;
+  solarLive: SolarLive | null;
   lampMesh: Mesh;
   /** Sunlight falling through the windows onto the floor. */
   sunMesh: Mesh;
@@ -453,7 +459,10 @@ export class FloorplanViewer {
   private readonly haloTexture: CanvasTexture;
   /** Roof over the top floor (house view only), its opacity and the camera distance of the house view. */
   /** The roof: one group with a part per floor it sits on (each part follows its floor). */
-  private roof: { group: Group; parts: { group: Group; floorId: string; base: number }[]; solid: MeshBasicMaterial; lines: LineBasicMaterial; glass: MeshBasicMaterial } | null = null;
+  private roof: { group: Group; parts: { group: Group; floorId: string; base: number }[]; solid: MeshBasicMaterial; lines: LineBasicMaterial; glass: MeshBasicMaterial; live: MeshBasicMaterial; lives: SolarLive[] } | null = null;
+  /** Energie Pro: production level (0..1) per solar field; the overlays animate while any is above zero. */
+  private solarLevels = new Map<string, number>();
+  private solarActive = false;
   private roofO = 0;
   /** Robot vacuums: their info from Home Assistant, how they move, and their meshes. */
   private robots = new Map<string, { info: RobotInfo; motion: RobotMotion; group: Group; led: MeshBasicMaterial }>();
@@ -749,6 +758,16 @@ export class FloorplanViewer {
   }
 
   /** Energy cables; the stripes run while any cable carries power. */
+  /** Energie Pro: how much every solar field produces (0..1 of its peak); the modules glow and sweep with it. */
+  setSolarLevels(levels: Map<string, number>): void {
+    this.solarLevels = levels;
+    let alive = false;
+    for (const l of this.roof?.lives ?? []) if (writeSolarLevels(l, levels)) alive = true;
+    for (const fv of this.floors) if (fv.solarLive && writeSolarLevels(fv.solarLive, levels)) alive = true;
+    this.solarActive = alive;
+    this.invalidate();
+  }
+
   setFlows(flows: FlowPiece[]): void {
     this.flows = flows;
     const now = this.flowSeconds();
@@ -1382,6 +1401,7 @@ export class FloorplanViewer {
       ),
       blinds: themed(makeFoldable(new MeshBasicMaterial({ map: this.blindTexture, vertexColors: true, side: DoubleSide }), mask), this.themeUniform),
       flow: flowMaterial(this.flowTime),
+      solarLive: solarLiveMaterial(this.flowTime),
       lamps: themed(new MeshBasicMaterial({ vertexColors: true }), this.themeUniform),
       halos: new PointsMaterial({
         map: this.haloTexture,
@@ -1454,6 +1474,13 @@ export class FloorplanViewer {
       const flowMesh = new Mesh(new Geometry(), materials.flow);
       flowMesh.renderOrder = 5;
       flowMesh.frustumCulled = false;
+      // the living overlay of the garden and wall fields
+      const solarLive = buildSolarLive(garden, floor.elevation);
+      const solarMesh = solarLive ? new Mesh(solarLive.geometry, materials.solarLive) : null;
+      if (solarMesh) {
+        solarMesh.renderOrder = 6;
+        writeSolarLevels(solarLive!, this.solarLevels);
+      }
       // the fold shader moves hidden parts, so the bounding spheres must not cull them early
       for (const m of [framesMesh, blindsMesh, glassMesh]) m.frustumCulled = false;
       // glass walls are drawn after everything opaque in the room, so doors and furniture show through
@@ -1479,6 +1506,7 @@ export class FloorplanViewer {
         fridgeMesh,
         screenMesh,
         glassWalls,
+        ...(solarMesh ? [solarMesh] : []),
       );
       this.root.add(group);
 
@@ -1528,6 +1556,8 @@ export class FloorplanViewer {
         glassMesh,
         blindsMesh,
         flowMesh,
+        solarMesh,
+        solarLive,
         lampMesh,
         sunMesh,
         sunSig: "",
@@ -1592,11 +1622,17 @@ export class FloorplanViewer {
       this.roof.solid.dispose();
       this.roof.lines.dispose();
       this.roof.glass.dispose();
+      this.roof.live.dispose();
       this.scene.remove(this.roof.group);
       this.roof = null;
     }
     const geos = this.building ? buildRoof(this.building, this.roofWindows) : [];
     if (!geos.length) return;
+    // the living overlays of the roof fields, each on the part its face belongs to
+    const faces = new Map(roofFaces(this.building!).map((f) => [f.key, f]));
+    const fields = this.building!.settings.roof?.solar ?? [];
+    const live = solarLiveMaterial(this.flowTime);
+    const lives: SolarLive[] = [];
     const group = new Group();
     const solid = themed(new MeshBasicMaterial({ vertexColors: true, transparent: true, side: DoubleSide }), this.themeUniform);
     const lines = themed(new LineBasicMaterial({ vertexColors: true, transparent: true, blending: lineBlending(this.theme), depthWrite: false }), this.themeUniform, true);
@@ -1606,13 +1642,26 @@ export class FloorplanViewer {
       const part = new Group();
       part.add(new Mesh(geo.solid.geometry(), solid), new LineSegments(geo.lines.geometry(), lines));
       if (geo.glass.count) part.add(new Mesh(geo.glass.geometry(), glass));
+      const entries = fields.flatMap((field) => {
+        const face = faces.get(field.face);
+        const mine = face && (face.section ? geo.sections?.includes(face.section) : geo === geos[0]);
+        return mine ? [{ face: face!, field }] : [];
+      });
+      const overlay = buildSolarLive(entries, geo.floor.elevation + geo.base);
+      if (overlay) {
+        const mesh = new Mesh(overlay.geometry, live);
+        mesh.renderOrder = 9;
+        part.add(mesh);
+        lives.push(overlay);
+        writeSolarLevels(overlay, this.solarLevels);
+      }
       part.renderOrder = 8;
       group.add(part);
       return { group: part, floorId: geo.floor.id, base: geo.base };
     });
     group.renderOrder = 8;
     this.scene.add(group);
-    this.roof = { group, parts, solid, lines, glass };
+    this.roof = { group, parts, solid, lines, glass, live, lives };
     this.placeRoof();
   }
 
@@ -1639,6 +1688,7 @@ export class FloorplanViewer {
     roof.solid.depthWrite = this.roofO > 0.9;
     roof.lines.opacity = this.roofO;
     roof.glass.opacity = this.roofO * 0.28;
+    roof.live.opacity = this.roofO;
     return this.roofO !== before && this.roofO !== target;
   }
 
@@ -1725,6 +1775,7 @@ export class FloorplanViewer {
     m.glass.opacity = fv.o;
     m.glassWall.opacity = fv.o;
     m.flow.opacity = fv.o;
+    m.solarLive.opacity = fv.o;
     m.lamps.opacity = fv.o;
     m.halos.opacity = fv.o;
     m.cones.opacity = fv.o;
@@ -2958,6 +3009,7 @@ export class FloorplanViewer {
     if (flashing) busy.push("flash");
     if (roofMoving) busy.push("roof");
     if (this.flowActive) busy.push("flow");
+    if (this.solarActive) busy.push("solar");
     if (this.effectTick) busy.push("effect");
     if (robotsMoving) busy.push("robot");
     if (orbiting) busy.push("orbit");
@@ -3011,8 +3063,8 @@ export class FloorplanViewer {
         this.invalidate();
       }, this.lowQuality ? 66 : 33);
     }
-    if (!moving && this.flowActive && !this.flowTimer) {
-      // only the energy flow moves: about 30 frames per second are enough
+    if (!moving && (this.flowActive || this.solarActive) && !this.flowTimer) {
+      // only the energy flow (or the living modules) moves: about 30 frames per second are enough
       this.flowTimer = setTimeout(() => {
         this.flowTimer = undefined;
         this.invalidate();

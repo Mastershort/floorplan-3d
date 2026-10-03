@@ -23,7 +23,7 @@ import {
 } from "../devices.ts";
 import { alertColor, alertEntities, alertSources, alertText, findAlerts, type Alert, type AlertSources } from "../alerts.ts";
 import { iconPath, iconSvg } from "../icons.ts";
-import { deviceSensors, energySummary, fieldPowers, findConsumers, flowColor, flowSegments, powerSensorFor, readPower, type Consumer, type EnergySummary } from "../energy.ts";
+import { deviceSensors, energySummary, fieldLevels, fieldPowers, findConsumers, flowColor, flowSegments, powerSensorFor, readPower, type Consumer, type EnergySummary } from "../energy.ts";
 import { STAGE, type Theme } from "../themes.ts";
 import { HEAT_SCALES, heatColor, heatGradient, roomValues, type HeatMode } from "../heatmap.ts";
 import { furnitureName } from "../furniture-names.ts";
@@ -384,6 +384,8 @@ export class Fp3dView3d extends LitElement {
       v.setPacks([...getPacks()]);
       // vehicles in parking spots come from packs too: look them up again now that the packs are here
       if (this.hass && this.building) v.setParked(parkedVehicles(this.hass, this.building));
+      // a feature pack may have arrived with them (Energie Pro): the cables and modules follow
+      this.syncDevices(true);
     }
     if (changed.has("building") && this.building) v.setBuilding(this.building);
     if (changed.has("building") || changed.has("theme") || changed.has("floorThumbs") || changed.has("packs")) this.scheduleThumbs();
@@ -524,10 +526,14 @@ export class Fp3dView3d extends LitElement {
     const batteryPlaced =
       b.floors.flatMap((f) => f.furniture.filter((m) => m.type === "home_battery").map((m) => ({ floorId: f.id, x: m.x, z: m.z })))[0] ??
       (b.energy.battery ? b.floors.flatMap((f) => f.placements.filter((p) => p.entity_id === b.energy.battery).map((p) => ({ floorId: f.id, x: p.x, z: p.z })))[0] : null);
+    const pro = hasFeature("energy_pro");
+    const powers = pro ? fieldPowers(hass, b, summary.solar) : null;
+    // the modules live with their production (at night, and without Pro, they rest)
+    v.setSolarLevels(powers && !this.dimmed ? fieldLevels(b, powers) : new Map());
     v.setFlows(
-      !hasFeature("energy_pro") || !(this.flows ?? this._flows) || this.dimmed
+      !pro || !(this.flows ?? this._flows) || this.dimmed
         ? []
-        : flowSegments({ building: b, consumers, summary, battery: batteryPlaced ?? null, fieldPower: fieldPowers(hass, b, summary.solar) }).map((f) => ({
+        : flowSegments({ building: b, consumers, summary, battery: batteryPlaced ?? null, fieldPower: powers }).map((f) => ({
         floorId: f.floorId,
         a: f.a,
         b: f.b,

@@ -140,6 +140,7 @@ const shots = [
   // Energie Pro: the cables from the roof to the inverter, battery, meter, wallbox and grid with their moving dots
   { name: "view-flows", query: "?flows", width: 1280, height: 800, editor: true, editorScript: "e.fit();", then3d: "Alle Etagen", then3dAlso: ["Gestapelt"], camera: { theta: 0.6, phi: 1.15, radius: 22 } },
   { name: "view-flows-garage", query: "?flows", width: 1280, height: 800, editor: true, editorScript: "e.fit();", then3d: "Alle Etagen", then3dAlso: ["Gestapelt"], camera: { theta: 3.6, phi: 1.2, radius: 16 } },
+  { name: "view-solar-live", query: "?flows&pv=5400", width: 1280, height: 800, editor: true, editorScript: "e.fit();", then3d: "Alle Etagen", then3dAlso: ["Gestapelt"], camera: { theta: 1.1, phi: 0.9, radius: 26 } },
   { name: "view-flows-eg", query: "?flows", width: 1280, height: 800, editor: true, editorScript: "e.fit();", then3d: "Erdgeschoss", camera: { theta: 0.25, phi: 1.2, radius: 11 } },
   { name: "view-flows-room", query: "?flows", width: 1280, height: 800, click: "Erdgeschoss", then: "Garage" },
   { name: "view-flows-back", query: "?flows", width: 1280, height: 800, editor: true, editorScript: "e.fit();", then3d: "Alle Etagen", then3dAlso: ["Gestapelt"], camera: { theta: 2.6, phi: 1.1, radius: 18 } },

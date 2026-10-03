@@ -757,12 +757,30 @@ function solarRoute(building: Building, f: SolarField, power: number, target: De
   return absolutePolyline(building, pts, power, "solar", floor);
 }
 
+/** Modules of a field (the ones left out do not count). */
+export function modulesOf(f: Pick<SolarField, "rows" | "cols" | "skip">): number {
+  return Math.max(1, f.rows * f.cols - (f.skip?.length ?? 0));
+}
+
+/** A common module makes about 400 W at its peak. */
+export const MODULE_PEAK_W = 400;
+
+/** Production of every field as a share of its peak (0..1), eased so a weak morning sun shows already. */
+export function fieldLevels(building: Building, powers: ReadonlyMap<string, number>): Map<string, number> {
+  const out = new Map<string, number>();
+  for (const f of building.settings.roof.solar ?? []) {
+    const share = Math.min(1, (powers.get(f.id) ?? 0) / (modulesOf(f) * MODULE_PEAK_W));
+    out.set(f.id, share > 0.003 ? Math.pow(share, 0.6) : 0);
+  }
+  return out;
+}
+
 /** Power (W) of every solar field: its own sensor, else its string's sensor shared by modules, else the plant's. */
 export function fieldPowers(hass: HomeAssistant, building: Building, solar: number | null): Map<string, number> {
   const out = new Map<string, number>();
   const fields = building.settings.roof.solar ?? [];
   const strings = building.settings.roof.strings ?? [];
-  const modules = (f: SolarField) => Math.max(1, f.rows * f.cols - (f.skip?.length ?? 0));
+  const modules = modulesOf;
   const rest: SolarField[] = [];
   let known = 0;
   const byString = new Map<string, SolarField[]>();

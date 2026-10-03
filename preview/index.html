@@ -204,6 +204,10 @@
         },
       };
 
+      if (params.has("pv")) {
+        // ?pv=5400 sets the solar power (W) of the demo plant, e.g. a sunny noon
+        hass.states["sensor.pv_leistung"] = { ...hass.states["sensor.pv_leistung"], state: params.get("pv") };
+      }
       if (params.has("weather")) {
         // ?weather=pouring|snowy|fog|lightning-rainy|cloudy… sets the demo weather
         hass.states["weather.zuhause"].state = params.get("weather");
