@@ -1000,6 +1000,31 @@ export class Fp3dEditor extends LitElement {
         const cable = target.closest("[data-cable]")?.getAttribute("data-cable");
         if (cable) {
           this._cableId = cable;
+          // grabbing an automatic cable lays it by hand right away, with a new point under the pointer to drag
+          if (this.isAdmin && this._floorId && !this._doc.settings.roof.cables?.some((c) => c.id === cable)) {
+            const base = this._doc;
+            this.layCable(cable);
+            const laid = this._doc.settings.roof.cables?.find((c) => c.id === cable);
+            const mine = this.cableSegments().filter((x) => x.key === cable);
+            if (laid && mine.length) {
+              const chain: Vec2[] = [[mine[0].a[0], mine[0].a[2]], ...laid.points, [mine[mine.length - 1].b[0], mine[mine.length - 1].b[2]]];
+              let index = 0;
+              let best = Infinity;
+              for (let i = 0; i + 1 < chain.length; i++) {
+                const d = distToSegment(world, chain[i], chain[i + 1]);
+                if (d < best) {
+                  best = d;
+                  index = i;
+                }
+              }
+              this.change((d) => {
+                const c = d.settings.roof.cables?.find((x) => x.id === cable);
+                if (c) c.points.splice(index, 0, [round(world[0]), round(world[1])]);
+              });
+              this.drag = { kind: "cablept", id: cable, index, base, moved: true };
+              return;
+            }
+          }
           this.drag = { kind: "pan", last: local };
           return;
         }
@@ -7164,3 +7189,12 @@ if (!customElements.get("fp3d-editor")) customElements.define("fp3d-editor", Fp3
 
 // the extensions page is part of this bundle: the panel loads it the same way as the editor
 import "./extensions.ts";
+
+/** Distance of a plan point from a segment. */
+function distToSegment(p: Vec2, a: Vec2, b: Vec2): number {
+  const dx = b[0] - a[0];
+  const dz = b[1] - a[1];
+  const l2 = dx * dx + dz * dz || 1;
+  const t = Math.min(1, Math.max(0, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dz) / l2));
+  return Math.hypot(p[0] - a[0] - dx * t, p[1] - a[1] - dz * t);
+}
