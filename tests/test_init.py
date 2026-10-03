@@ -192,6 +192,35 @@ async def test_furniture_links_default_to_automatic(hass: HomeAssistant, hass_ws
     assert (got[1]["entity"], got[1]["power"]) == ("media_player.tv", "none")
 
 
+async def test_roof_windows_keep_name_and_motor(hass: HomeAssistant, hass_ws_client) -> None:
+    """A roof window's name and window motor are saved; entities default to None (automatic)."""
+    await _setup(hass)
+    client = await hass_ws_client(hass)
+    building = copy.deepcopy(BUILDING)
+    window = {"id": "w1", "face": "s:a", "u": 1, "v": 2, "name": "Bad", "window": "cover.velux", "cover": "none"}
+    building["settings"] = {**building.get("settings", {}), "roof": {"type": "gable", "windows": [window]}}
+    await client.send_json_auto_id({"type": "neonplan3d/building/save", "building": building})
+    assert (await client.receive_json())["success"]
+    await client.send_json_auto_id({"type": "neonplan3d/building/get"})
+    got = (await client.receive_json())["result"]["building"]["settings"]["roof"]["windows"][0]
+    assert (got["name"], got["window"], got["cover"], got["contact"]) == ("Bad", "cover.velux", "none", None)
+
+
+async def test_dormer_flag_is_kept(hass: HomeAssistant, hass_ws_client) -> None:
+    """A roof section marked as a dormer stays one; others default to False."""
+    await _setup(hass)
+    client = await hass_ws_client(hass)
+    building = copy.deepcopy(BUILDING)
+    sec = {"id": "s1", "x0": 0, "z0": 0, "x1": 4, "z1": 3, "eave_a": 2.5, "eave_b": 2.5, "base": 2.5}
+    sections = [sec, {**sec, "id": "d1", "dormer": True}]
+    building["settings"] = {**building.get("settings", {}), "roof": {"type": "custom", "sections": sections}}
+    await client.send_json_auto_id({"type": "neonplan3d/building/save", "building": building})
+    assert (await client.receive_json())["success"]
+    await client.send_json_auto_id({"type": "neonplan3d/building/get"})
+    got = (await client.receive_json())["result"]["building"]["settings"]["roof"]["sections"]
+    assert [s["dormer"] for s in got] == [False, True]
+
+
 async def test_screen_pictures_keep_their_images(hass: HomeAssistant, hass_ws_client) -> None:
     """Images used by screen picture rules are not dropped as unused when the building is saved."""
     await _setup(hass)

@@ -19,6 +19,7 @@ import {
   LineSegments,
   Mesh,
   MeshBasicMaterial,
+  type Object3D,
   MultiplyBlending,
   OrthographicCamera,
   PerspectiveCamera,
@@ -46,13 +47,15 @@ import type { Building, Floor, Furniture, Room } from "../model.ts";
 import { recolorLamps, SHADE_SENTINEL, shadeFactors } from "./lamp-colors.ts";
 import { centroid, pointInPolygon, openingStyle, WALL_LAMP_Y } from "../model.ts";
 import { buildFloorGeometry, SLAB, stairHoles, type FloorGeometry } from "./build.ts";
+import { roofCeiling } from "../roof-sections.ts";
 import { OrbitControls, type OrbitView } from "./controls.ts";
 import { makeFoldable, type FoldMasks } from "./fold.ts";
 import { pushCameraModel, pushPackLamp, screenRect, pushFridgeDoors } from "./furniture.ts";
 import { mountBase, packItem, setPacks, type FurniturePack } from "../packs.ts";
 import { withVehicles } from "../parking.ts";
 import { buildRoof, type RoofWindowState } from "./roof.ts";
-import { GROUND, groundFace, groundFloor, wallFaces } from "../solar.ts";
+import { GROUND, groundFace, groundFloor, roofFaces, wallFaces, windowCorners } from "../solar.ts";
+import type { RoofWindowSpot } from "../devices.ts";
 import { lineBlending, themed, themeIndex, type Theme, type ThemeUniform } from "./theme.ts";
 
 export type { Theme } from "./theme.ts";
@@ -452,7 +455,7 @@ export class FloorplanViewer {
   private readonly haloTexture: CanvasTexture;
   /** Roof over the top floor (house view only), its opacity and the camera distance of the house view. */
   /** The roof: one group with a part per floor it sits on (each part follows its floor). */
-  private roof: { group: Group; parts: { group: Group; floorId: string; base: number }[]; solid: MeshBasicMaterial; lines: LineBasicMaterial; glass: MeshBasicMaterial } | null = null;
+  private roof: { group: Group; parts: { group: Group; floorId: string; base: number }[]; solid: MeshBasicMaterial; lines: LineBasicMaterial; glass: MeshBasicMaterial; windows: Object3D[] } | null = null;
   private roofO = 0;
   /** Robot vacuums: their info from Home Assistant, how they move, and their meshes. */
   private robots = new Map<string, { info: RobotInfo; motion: RobotMotion; group: Group; led: MeshBasicMaterial }>();
@@ -735,6 +738,21 @@ export class FloorplanViewer {
       this.buildLamps(fv);
     }
     this.invalidate();
+  }
+
+  /** Where each roof window sits (its middle in the plan and its height): the room under it gives its entities. */
+  roofWindowSpots(): RoofWindowSpot[] {
+    const b = this.building;
+    const windows = b?.settings.roof?.windows ?? [];
+    if (!b || !windows.length) return [];
+    const faces = new Map(roofFaces(b).map((f) => [f.key, f]));
+    const out: RoofWindowSpot[] = [];
+    for (const w of windows) {
+      const face = faces.get(w.face);
+      const c = face ? windowCorners(face, w) : null;
+      if (c) out.push({ id: w.id, x: c.reduce((t, p) => t + p[0], 0) / 4, y: c.reduce((t, p) => t + p[1], 0) / 4, z: c.reduce((t, p) => t + p[2], 0) / 4 });
+    }
+    return out;
   }
 
   /** Roof windows open, tilted or with the blind down: the roof is rebuilt when that changes. */
@@ -1239,7 +1257,7 @@ export class FloorplanViewer {
   /** Light surface of a floor (rebuilt with the floor plan and when the detail level changes). */
   private buildLightSurface(fv: FloorView): void {
     const cell = this.lowQuality ? 0.5 : 0.25;
-    const surface = buildLightSurface(fv.floor, fv.geo.walls2d, fv.geo.wallBuckets, fv.geo.openings, cell, fv.geo.holes);
+    const surface = buildLightSurface(fv.floor, fv.geo.walls2d, fv.geo.wallBuckets, fv.geo.openings, cell, fv.geo.holes, fv.geo.roofTop);
     fv.lightSurface = surface;
     const g = new Geometry();
     g.setAttribute("position", new Float32BufferAttribute(surface.pos, 3));
@@ -1403,6 +1421,8 @@ export class FloorplanViewer {
     const b = this.building;
     if (!b) return;
     const ordered = [...b.floors].sort((p, q) => p.elevation - q.elevation);
+    // walls under sloped roof sections end at the roof (attics, an A-frame)
+    const ceiling = roofCeiling(b);
     for (const floor of b.floors) {
       // solar fields in the garden stand on the ground floor, wall fields hang on their floor's walls
       const fields = b.settings.roof?.solar ?? [];
@@ -1415,7 +1435,7 @@ export class FloorplanViewer {
           if (face) garden.push({ field, face });
         }
       }
-      const geo = buildFloorGeometry(withVehicles(floor, this.parked), b.settings.wall_exterior, b.settings.wall_interior, stairHoles(b.floors, floor), garden);
+      const geo = buildFloorGeometry(withVehicles(floor, this.parked), b.settings.wall_exterior, b.settings.wall_interior, stairHoles(b.floors, floor), garden, ceiling);
       const mask: FoldMasks = { standing: { value: 0xffff }, glass: { value: 0 } };
       const materials = this.makeMaterials(mask);
       const group = new Group();
@@ -1591,6 +1611,10 @@ export class FloorplanViewer {
       this.roof.solid.dispose();
       this.roof.lines.dispose();
       this.roof.glass.dispose();
+      for (const o of this.roof.windows) {
+        o.removeFromParent();
+        ((o as Mesh).geometry as BufferGeometry | undefined)?.dispose();
+      }
       this.scene.remove(this.roof.group);
       this.roof = null;
     }
@@ -1611,7 +1635,19 @@ export class FloorplanViewer {
     });
     group.renderOrder = 8;
     this.scene.add(group);
-    this.roof = { group, parts, solid, lines, glass };
+    // roof windows belong to the floor the roof sits on: they stay when the roof fades out or is hidden
+    const windows: Object3D[] = [];
+    for (const geo of geos) {
+      for (const [floorId, win] of geo.windows ?? []) {
+        const fv = this.floorMap.get(floorId);
+        if (!fv) continue;
+        for (const o of [new Mesh(win.solid.geometry(), fv.framesMesh.material), new LineSegments(win.lines.geometry(), fv.materials.lines)]) {
+          fv.group.add(o);
+          windows.push(o);
+        }
+      }
+    }
+    this.roof = { group, parts, solid, lines, glass, windows };
     this.placeRoof();
   }
 

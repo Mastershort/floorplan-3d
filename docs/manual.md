@@ -357,11 +357,28 @@ A simple house gets a flat or gable roof over the whole top floor under **Settin
 
 ![A terrace roof in front of the house](images/view-canopy.jpg)
 
+**Attic and A-frame:** Walls under a roof section end at the roof's underside. A floor in the roof space gets its slopes this way. The walls along the eaves become knee walls, the gable walls reach up under the ridge, and inner walls end at the slope. Doors and windows end below the roof as well.
+
+- For an **attic**, give the section the floor's knee wall height as eave and top of walls, e.g. the attic floor's height above ground + 1.0 m, and the pitch of the roof. The attic's walls can stay at full height: the roof cuts them.
+- For an **A-frame**, set both eaves and the top of walls to **0 m** and a steep pitch (e.g. 60°). The roof then comes down to the ground, and its overhang stops there. A gallery floor under the ridge is cut by the roof too; draw it only as wide as there is room under the slopes.
+- In the floor and room view the sloped ceiling shows as faint lines of rafters and purlins over the rooms; in the cut view they fold away like the upper walls.
+- In the editor a dashed orange line marks where the ceiling is **1.5 m** above the floor. Beyond it, towards the eaves, there is less headroom.
+- Furniture is not cut by the roof yet: a tall cabinet near a knee wall can still reach through the slope.
+
 ![The Roof tool with a selected roof section](images/editor-roof.jpg)
 
 #### Roof windows
 
 Below the roof sections, **+ Roof window** puts a window into a roof face (78 × 118 cm by default). Drag it in the plan, also onto another roof face. Like a window it has a **Blind**, a **Contact** and a **Tilt contact**: open, the sash swings out, hinged at the top; tilted, a little; the blind comes down over the glass from the top.
+
+Each roof window also has a **Name** and a **Window motor**: a motor like Velux or Roto (a `cover` entity of class *window*) opens the sash as far as its position says. A field set to **Automatic** takes the motor, contact and blind from the area of the room under the window; **None** leaves it out. New roof windows start on Automatic; older ones without an entry stay without. Drag the yellow corners of the selected window in the plan to resize it; the opposite corner stays put. A window in a roof section cuts a hole into the slope, so you look out from the attic.
+
+#### Dormers
+
+Select the main roof section, press **+ Dormer** and tap the slope where it goes. NeonPlan 3D adds a small roof section marked **Dormer**: 2 m wide, its front flush with that slope's eave (the facade), a 30° gable roof whose eaves stand up to 1.5 m above the main eave, and as deep as its ridge needs to run into the main slope. Its cheeks are built down to the main slope, and the main slope opens under it. Adjust it like any section.
+
+- Under the dormer its roof is the ceiling, so the attic's outer wall there rises up to it: put the dormer's front window into that wall with **Door & window**, as any window. Rooms under it get the extra headroom.
+- A section with the **Dormer** switch off is an ordinary section again.
 
 ### 4.20 Energy: solar fields
 

@@ -174,6 +174,55 @@ export function pushLyingCyl(buf: GeoBuffer, at: (along: number, across: number)
   }
 }
 
+/**
+ * A prism whose top follows a height per corner (a wall under a sloped roof): like pushPrism, with
+ * `y1[i]` the top at `poly[i]`. Corners where the top meets the bottom give no faces.
+ */
+export function pushSlopedPrism(
+  buf: GeoBuffer,
+  poly: Vec2[],
+  y0: number,
+  y1: number[],
+  side: number,
+  top: number,
+  opts: { aoFrom?: number; fold?: number; topFold?: number; bottom?: boolean } = {},
+): void {
+  const aoFrom = opts.aoFrom ?? y0;
+  const fold = opts.fold ?? ALWAYS;
+  const k = (y: number) => 0.5 + 0.5 * Math.min(1, Math.max(0, (y - aoFrom) / 1.6));
+  const tris = triangulate(poly);
+  const topC = new Color(top);
+  for (const [i, j, l] of tris) {
+    const a = poly[i];
+    const b = poly[j];
+    const c = poly[l];
+    buf.tri([a[0], y1[i], a[1]], [c[0], y1[l], c[1]], [b[0], y1[j], b[1]], topC, topC, topC, undefined, opts.topFold ?? fold);
+  }
+  if (opts.bottom) {
+    const botC = shade(side, 0.55);
+    for (const [i, j, l] of tris) {
+      const a = poly[i];
+      const b = poly[j];
+      const c = poly[l];
+      buf.tri([a[0], y0, a[1]], [b[0], y0, b[1]], [c[0], y0, c[1]], botC, botC, botC, undefined, fold);
+    }
+  }
+  for (let i = 0; i < poly.length; i++) {
+    const j = (i + 1) % poly.length;
+    const a = poly[i];
+    const b = poly[j];
+    const dx = b[0] - a[0];
+    const dz = b[1] - a[1];
+    const l = Math.hypot(dx, dz);
+    if (l < 1e-6 || (y1[i] - y0 < 1e-5 && y1[j] - y0 < 1e-5)) continue;
+    const facing = ((dz / l) * LIGHT[0] - (dx / l) * LIGHT[1] + 1) / 2;
+    const dir = 0.8 + 0.28 * facing;
+    const lo = shade(side, k(y0) * dir);
+    buf.tri([a[0], y0, a[1]], [a[0], y1[i], a[1]], [b[0], y1[j], b[1]], lo, shade(side, k(y1[i]) * dir), shade(side, k(y1[j]) * dir), undefined, fold);
+    buf.tri([a[0], y0, a[1]], [b[0], y1[j], b[1]], [b[0], y0, b[1]], lo, shade(side, k(y1[j]) * dir), lo, undefined, fold);
+  }
+}
+
 export function pushPrism(
   buf: GeoBuffer,
   poly: Vec2[],

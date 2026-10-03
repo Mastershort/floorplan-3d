@@ -18,7 +18,8 @@ All notable changes to NeonPlan 3D. The full notes in German and English are on 
 - **Energy devices:** solar inverter, home battery and wallbox, added and moved in the Energy tool; placed in the garage or a utility room against a wall, and the plan moves to them.
 - Home battery shows its charge and charging direction, the wallbox its status (charging, plugged in).
 - Solar fields and roof windows can be fixed. New furniture brings the plan to where it was put.
-- **Roof windows** in the roof faces, with blind, contact and tilt contact (the sash swings out, the blind comes down).
+- **Roof windows** in the roof faces, with blind, contact and tilt contact (the sash swings out, the blind comes down). A roof window also has a name and a window motor whose position opens the sash (Velux, Roto); motor, contact and blind are found in the room under it when set to automatic; its corners are dragged in the plan to resize it; in a roof section it opens a hole in the slope, so the attic looks out through it; it glows warm while open, like a window in a wall, and stays in view when the roof is hidden.
+- **Dormers:** "+ Dormer" puts a small gable roof on a slope, front flush with the facade, cheeks down to the slope that opens under it; the outer wall below rises up to it for a front window, and the rooms get its headroom.
 
 ## 1.7.0
 
@@ -58,6 +59,7 @@ All notable changes to NeonPlan 3D. The full notes in German and English are on 
 - **Loyalty discount** code for further purchases, shown in NeonPlan 3D.
 - The Extensions page shows once what a pack update brought.
 - Screens and status lights of pack furniture can link a light (glow in its colour) or a switch.
+- **Attics and A-frames:** walls under a roof section end at its underside (knee walls, gables up to the ridge, inner walls at the slope; doors and windows below it). The sloped ceiling shows as rafters and purlins in the floor view, the editor marks the 1.5 m headroom line, and a roof that reaches the ground stops there.
 
 ## 1.5.0
 

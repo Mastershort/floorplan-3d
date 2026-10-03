@@ -1,7 +1,7 @@
 // Devices of a room: which entities belong to an area, what kind they are, how they are placed and
 // what their state looks like. Pure functions (no Lit, no three.js) so they can be tested directly.
 
-import type { EntityRef, Floor, LampMount, Opening, Placement, Room, Vec2 } from "./model.ts";
+import type { Building, EntityRef, Floor, LampMount, Opening, Placement, Room, Vec2 } from "./model.ts";
 import { centroid, pointInPolygon } from "./model.ts";
 import { packScreen } from "./packs.ts";
 import type { HassEntity, HomeAssistant } from "./types.ts";
@@ -467,6 +467,71 @@ export interface OpeningEntities {
   /** A sensor with the blind's position while it moves (0–100 % or 0–1, open = high). */
   position?: string | null;
   positionInverted?: boolean;
+  /** A roof window's sash as a cover (Velux, Roto): its position tells how far it is open. */
+  window?: string | null;
+}
+
+/** Covers that are a window's sash (a roof window motor), not a blind in front of it. */
+const SASH_COVERS = new Set(["window"]);
+
+/** Where a roof window sits: its middle in the plan and its height (the 3D view works it out from the roof). */
+export interface RoofWindowSpot {
+  id: string;
+  x: number;
+  z: number;
+  y: number;
+}
+
+/** A roof window's entity set to "automatic": found in the room under it (empty stays none, as it always was). */
+export const ROOF_AUTO = "auto";
+
+/**
+ * Entities of every roof window: set by hand, or (when "auto") found in the area of the room under it:
+ * a cover of class "window" moves the sash, a window contact tells it is open, another cover is the
+ * blind. Empty or "none" leaves one out. In the order the windows come, each entity is used once.
+ */
+export function roofWindowEntities(hass: HomeAssistant, b: Building, spots: readonly RoofWindowSpot[]): Map<string, OpeningEntities> {
+  const out = new Map<string, OpeningEntities>();
+  const used = new Set<string>();
+  const floors = [...b.floors].sort((p, q) => q.elevation - p.elevation);
+  const pick = (ref: EntityRef | undefined, auto: () => string | undefined) => {
+    if (ref !== ROOF_AUTO) return ref && ref !== "none" ? ref : null;
+    const id = auto() ?? null;
+    if (id) used.add(id);
+    return id;
+  };
+  for (const w of b.settings.roof?.windows ?? []) {
+    const spot = spots.find((s) => s.id === w.id);
+    // the room under it: on the highest floor below the window that has a room there
+    const room = spot
+      ? floors
+          .filter((f) => f.elevation < spot.y)
+          .map((f) => f.rooms.find((r) => r.points.length >= 3 && pointInPolygon([spot.x, spot.z], r.points)))
+          .find((r) => !!r)
+      : undefined;
+    const ids = room ? areaEntities(hass, room.area_id).filter((id) => !used.has(id)) : [];
+    const cls = (id: string) => hass.states[id]?.attributes.device_class as string | undefined;
+    const covers = ids.filter((id) => kindOf(id) === "cover");
+    out.set(w.id, {
+      window: pick(w.window, () => covers.find((id) => SASH_COVERS.has(cls(id) ?? ""))),
+      contact: pick(w.contact, () => ids.find((id) => kindOf(id) === "binary" && WINDOW_CONTACTS.has(cls(id) ?? ""))),
+      cover: pick(w.cover, () => covers.find((id) => COVER_CLASSES.has(cls(id)) && !SASH_COVERS.has(cls(id) ?? "") && !used.has(id))),
+      tilt: pick(w.tilt, () => undefined),
+    });
+  }
+  return out;
+}
+
+/** How far a roof window's sash is open (0 … 1: a contact opens it fully, a sash motor by its position), whether it is tilted, and its blind. */
+export function roofWindowState(hass: HomeAssistant, e: OpeningEntities): { open: number; tilt: number; cover: number } {
+  const base = openingState(hass, e, "window");
+  let open = base.open;
+  const sash = e.window ? hass.states[e.window] : undefined;
+  if (sash && !isUnavailable(sash)) {
+    const pos = sash.attributes.current_position;
+    open = Math.max(open, typeof pos === "number" ? Math.min(100, Math.max(0, pos)) / 100 : sash.state === "open" || sash.state === "opening" ? 1 : 0);
+  }
+  return { open, tilt: base.tilt, cover: base.cover ?? 0 };
 }
 
 /** Pairs openings with entities in order; with `shared`, a single entity serves all openings. */
@@ -484,13 +549,14 @@ function pair(openings: Opening[], ids: string[], shared = false): Map<string, s
  * Entities of every door and window: set by hand, or (when null) matched automatically with the
  * covers and contact sensors of the room's area, in the order the openings sit on the room outline.
  */
-export function openingEntities(hass: HomeAssistant, floors: readonly Floor[]): Map<string, OpeningEntities> {
+export function openingEntities(hass: HomeAssistant, floors: readonly Floor[], taken: ReadonlySet<string> = new Set()): Map<string, OpeningEntities> {
   const out = new Map<string, OpeningEntities>();
   for (const floor of floors) {
     for (const room of floor.rooms) {
       const own = floor.openings.filter((o) => o.room_id === room.id).sort((a, b) => a.edge - b.edge || a.offset - b.offset);
       if (!own.length) continue;
-      const ids = areaEntities(hass, room.area_id);
+      // entities a roof window of the room took already are not offered again
+      const ids = areaEntities(hass, room.area_id).filter((id) => !taken.has(id));
       const cls = (id: string) => hass.states[id]?.attributes.device_class as string | undefined;
       const covers = ids.filter((id) => kindOf(id) === "cover" && COVER_CLASSES.has(cls(id)));
       const windows = own.filter((o) => o.type === "window");

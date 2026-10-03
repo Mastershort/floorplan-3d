@@ -11,6 +11,8 @@ import {
   kindOf,
   lightGlow,
   openingEntities,
+  roofWindowEntities,
+  roofWindowState,
   openingState,
   TOGGLE_KINDS,
   type FurnitureLinks,
@@ -209,6 +211,8 @@ export class Fp3dView3d extends LitElement {
   private shownPacks = -1;
   /** Entities of each door and window, and the registry they were matched with. */
   private openingLinks: Map<string, OpeningEntities> | null = null;
+  /** Entities of the roof windows (sash motor, contact, blind). */
+  private roofLinks = new Map<string, OpeningEntities>();
   private linkedRegistry: HomeAssistant["entities"] | undefined;
   /** Entities of electric furniture (TV, fridge, …). */
   private furnitureLinks = new Map<string, FurnitureLinks>();
@@ -426,11 +430,14 @@ export class Fp3dView3d extends LitElement {
     if (!v || !b || !this.hass) return;
     const hass = this.hass;
     if (force || !this.openingLinks || this.linkedRegistry !== hass.entities) {
-      this.openingLinks = openingEntities(hass, b.floors);
+      // roof windows first: the sash motors, contacts and blinds they take are not a wall window's
+      this.roofLinks = roofWindowEntities(hass, b, v.roofWindowSpots());
+      const taken = new Set([...this.roofLinks.values()].flatMap((e) => [e.window, e.cover, e.contact, e.tilt]).filter((x): x is string => !!x));
+      this.openingLinks = openingEntities(hass, b.floors, taken);
       this.furnitureLinks = furnitureEntities(hass, b.floors);
       this.linkedRegistry = hass.entities;
       this.findIndex = null;
-      const links = [...this.openingLinks.values()].flatMap((e) => [e.cover, e.contact, e.tilt, e.contact2 ?? null, e.tilt2 ?? null, e.position ?? null]);
+      const links = [...this.openingLinks.values(), ...this.roofLinks.values()].flatMap((e) => [e.cover, e.contact, e.tilt, e.contact2 ?? null, e.tilt2 ?? null, e.position ?? null, e.window ?? null]);
       const placed = placedEntities(b);
       const cameraSensors = placed.filter((id) => kindOf(id) === "camera").flatMap((id) => cameraMotionSensors(hass, id));
       const power = placed.map((id) => powerSensorFor(hass, id));
@@ -499,13 +506,8 @@ export class Fp3dView3d extends LitElement {
     v.setFridgeDoors(fridgeDoors(hass, b.floors));
     v.setRobots(this.robotInfos(hass, b));
     // roof windows: sash and blind follow their contact and cover like windows do
-    const roofWindows = new Map<string, { open: number; tilt: number; cover: number }>();
-    for (const w of b.settings.roof?.windows ?? []) {
-      const ref = (e: string | null | undefined) => (e && e !== "none" ? e : null);
-      const s = openingState(hass, { cover: ref(w.cover), contact: ref(w.contact), tilt: ref(w.tilt) }, "window");
-      roofWindows.set(w.id, { open: s.open, tilt: s.tilt, cover: s.cover ?? 0 });
-    }
-    v.setRoofWindows(roofWindows);
+    // roof windows: the sash follows its motor or contact, the blind its cover
+    v.setRoofWindows(new Map([...this.roofLinks].map(([id, e]) => [id, roofWindowState(hass, e)])));
     v.setParked(parkedVehicles(hass, b));
     const types = new Map(b.floors.flatMap((f) => f.openings.map((o) => [o.id, o.type] as const)));
     const openingStates = new Map([...this.openingLinks!].map(([id, e]) => [id, openingState(hass, e, types.get(id))]));

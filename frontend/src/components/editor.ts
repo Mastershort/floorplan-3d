@@ -3,7 +3,7 @@
 import { css, html, LitElement, nothing, svg, type PropertyValues, type TemplateResult } from "lit";
 import { fetchImage, listHistory, restoreSnapshot, storeImage, takeSnapshot, type Snapshot } from "../api.ts";
 import { download, exportFile, parseExport } from "../transfer.ts";
-import { areaEntities, autoPlace, CLIMATE_CLASSES, defaultHeight, entityName, entityAreaId, furnitureEntities, groupByDevice, hasScreen, isMediaFurniture, isPlaceable, isRoomClimateSensor, kindOf, openingEntities, otherAreaEntities, pictureRuleMatches, roomClimateSensors, unassignedEntities, windowPosition, type ClimateKey } from "../devices.ts";
+import { areaEntities, autoPlace, CLIMATE_CLASSES, defaultHeight, entityName, entityAreaId, furnitureEntities, groupByDevice, hasScreen, isMediaFurniture, isPlaceable, isRoomClimateSensor, kindOf, openingEntities, otherAreaEntities, pictureRuleMatches, roomClimateSensors, unassignedEntities, windowPosition, type ClimateKey, ROOF_AUTO, roofWindowEntities, type RoofWindowSpot } from "../devices.ts";
 import { furnitureSymbol } from "./furniture2d.ts";
 import { closeGaps, suggestedThickness } from "../geometry/gaps.ts";
 import { keepInRoom, snapToWall } from "../geometry/snap.ts";
@@ -11,9 +11,9 @@ import { holeInRoom } from "../geometry/holes.ts";
 import { weatherEntity } from "../weather.ts";
 import { SHOW_ENERGY, SHOW_PRESENCE } from "../flags.ts";
 import { hasFeature, manualUrl, shopUrl } from "../features.ts";
-import { isStatusSensor, robotRoomSensor, TOGGLE_KINDS } from "../devices.ts";
-import { ridgeHeight, roofSectionsFromRooms, sectionFrame, sectionProfile, wallTopUnder } from "../roof-sections.ts";
-import { bestFace, clampField, faceAt, faceCompass, fieldFace, fieldModules, GROUND, pointOnFace, proposeField, proposeGroundField, proposeWindow, proposeWallField, roofFaces, rowCounts, turnGroundField, fieldCenter, wallFaces, windowAsField, windowCorners, onFace, onField, rayOnFace, type RoofFace } from "../solar.ts";
+import { TOGGLE_KINDS, isStatusSensor, robotRoomSensor } from "../devices.ts";
+import { HEADROOM, insideRooms, ridgeHeight, roofCeiling, roofSectionsFromRooms, dormerFor, sectionFrame, sectionProfile, wallTopUnder } from "../roof-sections.ts";
+import { bestFace, clampField, faceAt, faceCompass, fieldFace, fieldModules, GROUND, pointOnFace, proposeField, proposeGroundField, proposeWindow, ROOF_WINDOW_H, ROOF_WINDOW_W, roofFaces, rowCounts, windowAsField, windowCorners, type RoofFace, proposeWallField, turnGroundField, fieldCenter, wallFaces, onFace, onField, rayOnFace } from "../solar.ts";
 import type { SurfaceGrab, SurfaceRay } from "../viewer/viewer3d.ts";
 import { storedImageIds } from "../transfer.ts";
 import { DEFAULT_WEATHER_EFFECTS, WEATHER_EFFECTS,
@@ -108,6 +108,7 @@ type Drag =
   | { kind: "roofmove"; id: string; start: Vec2; startScreen: [number, number]; base: Building; moved: boolean }
   | { kind: "solarturn"; id: string; base: Building; moved: boolean }
   | { kind: "solarmove"; id: string; start: Vec2; startScreen: [number, number]; base: Building; moved: boolean; grab: { du: number; ds: number } | null; win?: boolean }
+  | { kind: "roofwincorner"; id: string; corner: number; base: Building }
   | { kind: "outvertex"; id: string; index: number; base: Building; moved: boolean }
   | { kind: "roofcorner"; id: string; corner: [0 | 1, 0 | 1]; base: Building; moved: boolean }
   | { kind: "freewall"; start: Vec2; end: Vec2 }
@@ -122,7 +123,7 @@ interface Guides {
 }
 
 /** Drags that change the document live (restored when cancelled, recorded in the history when done). */
-const EDIT_DRAGS = new Set(["vertex", "room", "device", "opening", "furniture", "rotate", "resize", "outdoor", "roofmove", "roofcorner", "outvertex", "solarmove", "solarturn"]);
+const EDIT_DRAGS = new Set(["vertex", "room", "device", "opening", "furniture", "rotate", "resize", "outdoor", "roofmove", "roofcorner", "outvertex", "solarmove", "solarturn", "roofwincorner"]);
 
 const HISTORY = 100;
 const SNAP_PX = 10;
@@ -158,6 +159,7 @@ export class Fp3dEditor extends LitElement {
     _solarId: { state: true },
     _solarPick: { state: true },
     _roofWinId: { state: true },
+    _dormerPlace: { state: true },
     _furnQuery: { state: true },
     _libOpen: { state: true },
     _expanded: { state: true },
@@ -224,6 +226,8 @@ export class Fp3dEditor extends LitElement {
   private declare _solarPick: boolean;
   /** Selected roof window (roof tool). */
   private declare _roofWinId: string | null;
+  /** The next tap in the plan places a dormer on the selected section. */
+  private declare _dormerPlace: boolean;
   /** Furniture library: the search text, and which sections are open (built-in groups and packs). */
   private declare _furnQuery: string;
   private declare _libOpen: Set<string>;
@@ -293,6 +297,7 @@ export class Fp3dEditor extends LitElement {
     this._solarId = null;
     this._solarPick = false;
     this._roofWinId = null;
+    this._dormerPlace = false;
     this._furnQuery = "";
     this._libOpen = new Set(["group:lights", "group:living"]);
     try {
@@ -942,6 +947,18 @@ export class Fp3dEditor extends LitElement {
       this.drag = { kind: "freewall", start, end: start };
       return;
     }
+    // placing a dormer: where the tap is, on the selected section's slope
+    if (this._tool === "roof" && this._dormerPlace) {
+      this._dormerPlace = false;
+      const sec = this.roofSection;
+      const dormer = sec && this.isAdmin ? dormerFor(sec, world, uid("roof")) : null;
+      if (dormer) {
+        this.change((doc) => (doc.settings.roof.sections ??= []).push(dormer));
+        this._roofId = dormer.id;
+      }
+      this.drag = { kind: "pan", last: local };
+      return;
+    }
     if (this._tool === "roof" || this._tool === "energy") {
       const corner = target.closest("[data-roof-corner]")?.getAttribute("data-roof-corner");
       const body = target.closest("[data-roof]")?.getAttribute("data-roof");
@@ -977,6 +994,12 @@ export class Fp3dEditor extends LitElement {
         const grab = field && hit ? { du: hit.u - field.u, ds: Number.isNaN(hit.s) ? 0 : hit.s - field.v } : null;
         // solar fields are fittings like furniture: the plan lock (rooms, walls, openings) does not hold them
         this.drag = this.isAdmin && !field?.locked ? { kind: "solarmove", id: solar, start: world, startScreen: local, base: this._doc, moved: false, grab } : { kind: "pan", last: local };
+        return;
+      }
+      // a corner of the selected roof window: dragging it resizes the window, the opposite corner stays
+      const winCorner = this._tool === "roof" && this.isAdmin ? target.closest("[data-roofwincorner]")?.getAttribute("data-roofwincorner") : null;
+      if (winCorner && this._roofWinId && !this._doc.settings.roof.windows?.find((x) => x.id === this._roofWinId)?.locked) {
+        this.drag = { kind: "roofwincorner", id: this._roofWinId, corner: Number(winCorner), base: this._doc };
         return;
       }
       const win = this._tool === "roof" ? target.closest("[data-roofwin]")?.getAttribute("data-roofwin") : null;
@@ -1271,6 +1294,34 @@ export class Fp3dEditor extends LitElement {
           (doc) => {
             const sec = doc.settings.roof.sections?.find((x) => x.id === drag.id);
             if (sec) Object.assign(sec, { x0: round(src.x0 + dx), x1: round(src.x1 + dx), z0: round(src.z0 + dz), z1: round(src.z1 + dz) });
+          },
+          drag.base,
+          false,
+        );
+        break;
+      }
+      case "roofwincorner": {
+        const w = drag.base.settings.roof.windows?.find((x) => x.id === drag.id);
+        const face = w ? roofFaces(drag.base).find((f) => f.key === w.face) : undefined;
+        const hit = face ? pointOnFace(face, world) : null;
+        if (!w || !face || !hit) return;
+        const step = e.altKey ? 0.01 : 0.05;
+        const snapTo = (v: number) => round(Math.round(v / step) * step);
+        const ww = w.w || ROOF_WINDOW_W;
+        const wh = w.h || ROOF_WINDOW_H;
+        // corners: lower left, lower right, upper right, upper left; the opposite one stays where it is
+        const opp = (drag.corner + 2) % 4;
+        const ou = opp === 1 || opp === 2 ? w.u + ww : w.u;
+        const ov = opp >= 2 ? w.v + wh : w.v;
+        const u = snapTo(hit.u);
+        const v = snapTo(hit.s);
+        const nw = Math.min(4, Math.max(0.3, Math.abs(u - ou)));
+        const nh = Math.min(4, Math.max(0.3, Math.abs(v - ov)));
+        const next = { u: u < ou ? ou - nw : ou, v: v < ov ? ov - nh : ov, w: round(nw), h: round(nh) };
+        this.change(
+          (doc) => {
+            const x = doc.settings.roof.windows?.find((y) => y.id === drag.id);
+            if (x) Object.assign(x, next, clampField(face, windowAsField({ ...x, ...next })));
           },
           drag.base,
           false,
@@ -2232,7 +2283,10 @@ export class Fp3dEditor extends LitElement {
       const face = faces.get(w.face);
       const c = face ? windowCorners(face, w) : null;
       if (!c) return nothing;
-      return svg`<g data-roofwin=${w.id} class=${`fp3d-roofwin${w.id === this._roofWinId ? " fp3d-roofwin-sel" : ""}`}><polygon points=${c.map((p) => this.toScreen([p[0], p[2]]).join(",")).join(" ")} /></g>`;
+      const sel = w.id === this._roofWinId;
+      const pts = c.map((p) => this.toScreen([p[0], p[2]]));
+      return svg`<g data-roofwin=${w.id} class=${`fp3d-roofwin${sel ? " fp3d-roofwin-sel" : ""}`}><polygon points=${pts.map((p) => p.join(",")).join(" ")} /></g>
+        ${sel && this.isAdmin && !w.locked ? pts.map((p, i) => svg`<circle class="fp3d-roofwin-corner" data-roofwincorner=${i} cx=${p[0]} cy=${p[1]} r="6" />`) : nothing}`;
     })}</g>`;
   }
 
@@ -2241,7 +2295,8 @@ export class Fp3dEditor extends LitElement {
     const faces = roofFaces(this._doc).filter((f) => !f.flat);
     const face = bestFace(faces, this._doc.settings.north ?? 0) ?? roofFaces(this._doc)[0];
     if (!face) return;
-    const w = proposeWindow(face, uid("rwin"));
+    // a new window takes its motor, contact and blind from the room under it
+    const w = { ...proposeWindow(face, uid("rwin")), window: ROOF_AUTO, cover: ROOF_AUTO, contact: ROOF_AUTO };
     this.change((doc) => (doc.settings.roof.windows = [...(doc.settings.roof.windows ?? []), w]));
     this._roofWinId = w.id;
     this._roofId = null;
@@ -2281,7 +2336,7 @@ export class Fp3dEditor extends LitElement {
                   this._roofWinId = w.id;
                   this._roofId = null;
                 }}>
-                  <span>${this.t("roof_window")} ${i + 1} · ${face ? this.faceLabel(face) : this.t("solar_face_gone")}</span>
+                  <span>${w.name || `${this.t("roof_window")} ${i + 1}`} · ${face ? this.faceLabel(face) : this.t("solar_face_gone")}</span>
                 </button>
               </div>`;
             })}
@@ -2291,6 +2346,16 @@ export class Fp3dEditor extends LitElement {
     </section>`;
   }
 
+  /** Middle and height of roof windows (for the room under them). */
+  private roofWindowSpots(windows: readonly RoofWindow[]): RoofWindowSpot[] {
+    const faces = new Map(roofFaces(this._doc).map((f) => [f.key, f]));
+    return windows.flatMap((w) => {
+      const face = faces.get(w.face);
+      const c = face ? windowCorners(face, w) : null;
+      return c ? [{ id: w.id, x: c.reduce((t, p) => t + p[0], 0) / 4, y: c.reduce((t, p) => t + p[1], 0) / 4, z: c.reduce((t, p) => t + p[2], 0) / 4 }] : [];
+    });
+  }
+
   private renderRoofWindowForm(w: RoofWindow) {
     const admin = this.isAdmin;
     const faces = roofFaces(this._doc);
@@ -2298,10 +2363,15 @@ export class Fp3dEditor extends LitElement {
     const index = (this._doc.settings.roof.windows ?? []).findIndex((x) => x.id === w.id) + 1;
     const covers = this.entityOptions((id) => id.startsWith("cover."));
     const contacts = this.entityOptions((id) => id.startsWith("binary_sensor.") || id.startsWith("sensor."));
+    // what "automatic" picks: the entities of the room under the window
+    const auto = this.hass ? roofWindowEntities(this.hass, { ...this._doc, settings: { ...this._doc.settings, roof: { ...this._doc.settings.roof, windows: [{ ...w, window: ROOF_AUTO, cover: ROOF_AUTO, contact: ROOF_AUTO, tilt: null }] } } }, this.roofWindowSpots([w])).get(w.id) : undefined;
+    // the picker shows "automatic" for an empty choice: map it to "auto", and "none" to empty (none, as before)
+    const pickRef = (ref: string | null | undefined) => (ref === ROOF_AUTO ? null : (ref ?? "none"));
+    const keepRef = (v: string | null) => (v === null ? ROOF_AUTO : v === "none" ? null : v);
     return html`<button class="fp3d-btn fp3d-back" @click=${() => (this._roofWinId = null)}>‹ ${this.t("roof_sections")}</button>
       <section>
         <div class="fp3d-h3row">
-          <h3>🪟 ${this.t("roof_window")} ${index}</h3>
+          <h3>🪟 ${w.name || `${this.t("roof_window")} ${index}`}</h3>
           ${admin
             ? html`<button class="fp3d-btn fp3d-fix" aria-pressed=${!!w.locked} title=${this.t("fix_hint")} @click=${() => set({ locked: !w.locked })}>
                 ${w.locked ? `🔒 ${this.t("unfix")}` : `🔓 ${this.t("fix")}`}
@@ -2310,10 +2380,14 @@ export class Fp3dEditor extends LitElement {
         </div>
         <div class="fp3d-form">
           <label class="fp3d-field fp3d-wide"
+            >${this.t("room_name")}
+            <input .value=${w.name ?? ""} placeholder=${`${this.t("roof_window")} ${index}`} ?disabled=${!admin} @change=${(e: Event) => set({ name: (e.target as HTMLInputElement).value.trim() || null })}
+          /></label>
+          <label class="fp3d-field fp3d-wide"
             >${this.t("solar_face")}
             <select ?disabled=${!admin} @change=${(e: Event) => {
               const next = faces.find((x) => x.key === (e.target as HTMLSelectElement).value);
-              if (next) set({ ...proposeWindow(next, w.id), w: w.w, h: w.h, cover: w.cover, contact: w.contact, tilt: w.tilt });
+              if (next) set({ ...proposeWindow(next, w.id), name: w.name, w: w.w, h: w.h, cover: w.cover, contact: w.contact, tilt: w.tilt, window: w.window });
             }}>
               ${faces.map((x) => html`<option value=${x.key} ?selected=${x.key === w.face}>${this.faceLabel(x)}</option>`)}
             </select></label
@@ -2322,8 +2396,9 @@ export class Fp3dEditor extends LitElement {
           ${this.num(this.t("height_m"), w.h ?? 1.18, (v) => set({ h: Math.max(0.3, Math.min(4, round(v))) }), 0.01, 0.3)}
           ${this.num(this.t("solar_u"), w.u, (v) => set({ u: round(v) }), 0.05)}
           ${this.num(this.t("solar_v"), w.v, (v) => set({ v: round(v) }), 0.05)}
-          ${this.entitySelect(this.t("cover_entity"), w.cover ?? null, undefined, covers, (v) => set({ cover: v === "none" ? null : v }))}
-          ${this.entitySelect(this.t("contact_entity"), w.contact ?? null, undefined, contacts, (v) => set({ contact: v === "none" ? null : v }))}
+          ${this.entitySelect(this.t("roof_window_motor"), pickRef(w.window), auto?.window ?? null, covers, (v) => set({ window: keepRef(v) }))}
+          ${this.entitySelect(this.t("cover_entity"), pickRef(w.cover), auto?.cover ?? null, covers, (v) => set({ cover: keepRef(v) }))}
+          ${this.entitySelect(this.t("contact_entity"), pickRef(w.contact), auto?.contact ?? null, contacts, (v) => set({ contact: keepRef(v) }))}
           ${this.entitySelect(this.t("roof_window_tilt"), w.tilt ?? null, undefined, contacts, (v) => set({ tilt: v === "none" ? null : v }))}
         </div>
         <p class="fp3d-sub">${this.t("roof_window_hint")}</p>
@@ -2872,6 +2947,10 @@ export class Fp3dEditor extends LitElement {
           ><input type="checkbox" .checked=${!!sec.open} ?disabled=${!admin} @change=${(e: Event) => set({ open: (e.target as HTMLInputElement).checked })} />
           ${this.t("roof_open")}</label
         >
+        <label class="fp3d-check fp3d-wide" title=${this.t("roof_dormer_hint")}
+          ><input type="checkbox" .checked=${!!sec.dormer} ?disabled=${!admin} @change=${(e: Event) => set({ dormer: (e.target as HTMLInputElement).checked })} />
+          ${this.t("roof_dormer")}</label
+        >
         <div class="fp3d-form">
           ${flat
             ? num(this.t("roof_height"), sec.eave_a, (v) => set({ eave_a: v, eave_b: v }))
@@ -2890,7 +2969,12 @@ export class Fp3dEditor extends LitElement {
                 : html`<button class="fp3d-btn" title=${this.t("roof_swap_hint")} @click=${() => set({ flip: !sec.flip })}>⇅ ${this.t("roof_swap")}</button>`}
               <button class="fp3d-btn" @click=${() => this.duplicateRoofSection()}>${this.t("duplicate")}</button>
               <button class="fp3d-btn fp3d-danger" @click=${() => this.deleteRoofSection()}>${this.t("delete")}</button>
-            </div>`
+              ${flat || sec.dormer || sec.open
+                ? nothing
+                : html`<button class="fp3d-btn" aria-pressed=${this._dormerPlace} @click=${() => (this._dormerPlace = !this._dormerPlace)}>+ ${this.t("roof_dormer")}</button>`}
+            </div>
+            ${this._dormerPlace ? html`<p class="fp3d-sub">${this.t("roof_dormer_place")}</p>` : nothing}
+            ${sec.dormer ? html`<p class="fp3d-sub">${this.t("roof_dormer_hint")}</p>` : nothing}`
           : nothing}
       </section>`;
   }
@@ -3640,13 +3724,27 @@ export class Fp3dEditor extends LitElement {
         const pts = r.points.map((p) => this.toScreen(p).join(",")).join(" ");
         return svg`<polygon data-room=${r.id} class=${r.id === this._roomId ? "fp3d-room fp3d-room-sel" : "fp3d-room"} points=${pts} />`;
       })}</g>
-      ${this.renderEdgeHighlight()}
+      ${this.renderEdgeHighlight()} ${this.renderHeadroom(floor)}
       <g pointer-events="none">${floor.rooms.map((r) => {
         const [cx, cy] = this.toScreen(centroid(r.points));
         return svg`<text class="fp3d-room-name" x=${cx} y=${cy - 2}>${r.name}</text>
           <text class="fp3d-room-area" x=${cx} y=${cy + 14}>${this.t("area_m2", { a: formatNumber(this.hass, polygonArea(r.points), 1) })}</text>`;
       })}</g>
     `;
+  }
+
+  /** Under a sloped roof: a dashed line where the ceiling is 1.5 m above the floor (less headroom beyond it). */
+  private renderHeadroom(floor: Floor) {
+    const ceiling = roofCeiling(this._doc);
+    if (!ceiling) return nothing;
+    const rooms = floor.rooms.filter((r) => r.points.length >= 3);
+    const segs = ceiling.contour(floor.elevation + HEADROOM).flatMap(([a, b]) => insideRooms(a, b, rooms));
+    if (!segs.length) return nothing;
+    return svg`<g class="fp3d-headroom" pointer-events="none">${segs.map(([a, b]) => {
+      const [x1, y1] = this.toScreen(a);
+      const [x2, y2] = this.toScreen(b);
+      return svg`<line x1=${x1} y1=${y1} x2=${x2} y2=${y2}><title>${this.t("headroom_hint")}</title></line>`;
+    })}</g>`;
   }
 
   /** The wall of the selected room whose row in the wall height list is hovered. */
@@ -6198,6 +6296,12 @@ export class Fp3dEditor extends LitElement {
       .fp3d-place-all {
         margin: 10px 0 0;
       }
+      .fp3d-headroom line {
+        stroke: #ffb547;
+        stroke-width: 1.5;
+        stroke-dasharray: 3 4;
+        opacity: 0.8;
+      }
       .fp3d-roof-sec polygon {
         fill: color-mix(in srgb, #ffb547 10%, transparent);
         stroke: #ffb547;
@@ -6216,6 +6320,12 @@ export class Fp3dEditor extends LitElement {
         stroke: #e3e9f5;
         stroke-width: 2;
         cursor: move;
+      }
+      .fp3d-roofwin-corner {
+        fill: #ffd75a;
+        stroke: #0b1020;
+        stroke-width: 1.5;
+        cursor: nwse-resize;
       }
       .fp3d-roofwin-sel polygon {
         stroke: #ffd75a;

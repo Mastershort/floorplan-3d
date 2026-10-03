@@ -224,6 +224,8 @@ ROOF_SECTION_SCHEMA = vol.Schema(
         vol.Optional("locked", default=False): bool,
         # a canopy (terrace roof, carport): posts instead of walls, a see-through roof
         vol.Optional("open", default=False): bool,
+        # a dormer sitting on a larger section
+        vol.Optional("dormer", default=False): bool,
     },
     extra=vol.ALLOW_EXTRA,
 )
@@ -288,6 +290,9 @@ ROOF_WINDOW_SCHEMA = vol.Schema(
         vol.Optional("cover", default=None): _ENTITY_REF,
         vol.Optional("contact", default=None): _ENTITY_REF,
         vol.Optional("tilt", default=None): _ENTITY_REF,
+        # the sash motor (a cover whose position opens the window) and a name
+        vol.Optional("window", default=None): _ENTITY_REF,
+        vol.Optional("name", default=None): vol.Any(None, vol.All(str, vol.Length(max=64))),
         vol.Optional("locked", default=False): bool,
     },
     extra=vol.ALLOW_EXTRA,
