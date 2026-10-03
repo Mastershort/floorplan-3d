@@ -471,7 +471,7 @@ export class Fp3dView3d extends LitElement {
     v.setDevices([
       ...[...deviceMarkers, ...furniture.markers].map((m) => {
         // "without watts" drops the power badge (a plug shows only on / off)
-        const power = m.show === "no_power" ? null : (byDevice.get(m.id) ?? null);
+        const power = m.show === "no_power" || ("energyDevice" in m && m.energyDevice) ? null : (byDevice.get(m.id) ?? null);
         // at night (kiosk) colour effects rest
         const marker = { ...m, power, powerText: power === null ? undefined : formatPower(hass, power), effect: this.dimmed ? false : m.effect };
         return { ...marker, pin: this.showPin(marker) };
@@ -656,8 +656,8 @@ export class Fp3dView3d extends LitElement {
     b: Building,
     taken: Set<string>,
     consumerSensors: Set<string>,
-  ): { markers: (DeviceMarker & { fromFurniture: boolean })[]; consumers: Consumer[]; screens: Map<string, ScreenState>; targets: Map<string, string> } {
-    const markers: (DeviceMarker & { fromFurniture: boolean })[] = [];
+  ): { markers: (DeviceMarker & { fromFurniture: boolean; energyDevice?: boolean })[]; consumers: Consumer[]; screens: Map<string, ScreenState>; targets: Map<string, string> } {
+    const markers: (DeviceMarker & { fromFurniture: boolean; energyDevice?: boolean })[] = [];
     const consumers: Consumer[] = [];
     const screens = new Map<string, ScreenState>();
     const targets = new Map<string, string>();
@@ -673,8 +673,9 @@ export class Fp3dView3d extends LitElement {
         const extra = extraRef && extraRef !== "none" ? extraRef : null;
         const link = linked ?? (extra ? { entity: null, power: null } : undefined);
         if (!link) continue;
-        targets.set(f.id, link.entity ?? link.power ?? extra!);
-        const id = link.entity ?? link.power ?? extra!;
+        // a battery goes by its charge first: its power sensor is often placed on its own as well
+        const id = (f.type === "home_battery" ? (extra ?? link.entity ?? link.power) : (link.entity ?? link.power ?? extra))!;
+        targets.set(f.id, id);
         const st = link.entity ? hass.states[link.entity] : undefined;
         const power = link.power ? readPower(hass.states[link.power]) : null;
         if (link.power && power !== null && !consumerSensors.has(link.power)) {
@@ -720,6 +721,8 @@ export class Fp3dView3d extends LitElement {
           glow: null,
           // its pin grabs the item when furnishing
           furnitureId: f.id,
+          // inverter, battery, wallbox: their own text (watts, charge, status) is always worth a pin
+          energyDevice: f.type === "inverter" || f.type === "home_battery" || f.type === "wallbox",
           show: f.marker ?? undefined,
           fromFurniture: true,
         });
@@ -960,7 +963,7 @@ export class Fp3dView3d extends LitElement {
    * Marker rule: "important" leaves out devices that their 3D object stands for (lamps, a TV that is
    * off) and keeps devices without an object (sensors, heating, switches) and values (watts, the app).
    */
-  private showPin(m: DeviceMarker & { fromFurniture?: boolean }): boolean {
+  private showPin(m: DeviceMarker & { fromFurniture?: boolean; energyDevice?: boolean }): boolean {
     // while furnishing every placed device has a pin to grab it by
     if (this.furnish && !m.fromFurniture) return true;
     // the device's own setting wins over the marker mode (except "none", which hides every marker)
@@ -969,7 +972,7 @@ export class Fp3dView3d extends LitElement {
     if (m.lamp || m.model) return false;
     const kind = kindOf(m.id);
     if (kind === "light") return false;
-    if (m.fromFurniture) return (m.power ?? 0) >= 1 || (kind === "media" && m.active);
+    if (m.fromFurniture) return (m.power ?? 0) >= 1 || (kind === "media" && m.active) || (!!m.energyDevice && !!m.text);
     return true;
   }
 

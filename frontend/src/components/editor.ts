@@ -4683,24 +4683,6 @@ export class Fp3dEditor extends LitElement {
         )}
         ${lamp ? nothing : this.entitySelect(this.t("furn_power"), f.power ?? null, autoPick("power"), power, (v) => this.updateFurniture({ power: v }))}
       </div>
-      ${!lamp || f.entity
-        ? html`<label class="fp3d-check fp3d-wide" title=${this.t("device_confirm_hint")}
-            ><input type="checkbox" .checked=${!!f.confirm} ?disabled=${!this.isAdmin} @change=${(ev: Event) => this.updateFurniture({ confirm: (ev.target as HTMLInputElement).checked })} />
-            ${this.t("device_confirm")}</label
-          >
-          <div class="fp3d-form">${this.markerSelect(f.marker ?? null, (v) => this.updateFurniture({ marker: v }))}</div>`
-        : nothing}
-      ${f.type === "robot_vacuum"
-        ? html`<div class="fp3d-form fp3d-links">
-            ${this.entitySelect(
-              this.t("furn_robot_room"),
-              f.room_sensor ?? null,
-              robotRoomSensor(hass, furnitureEntities(hass, this._doc.floors).get(f.id)?.entity ?? null, null),
-              this.entityOptions((id) => id.startsWith("sensor.")),
-              (v) => this.updateFurniture({ room_sensor: v }),
-            )}
-          </div>`
-        : nothing}
       ${f.type === "home_battery"
         ? html`<div class="fp3d-form fp3d-links">
             ${this.entitySelect(
@@ -4720,6 +4702,24 @@ export class Fp3dEditor extends LitElement {
               undefined,
               this.entityOptions((id) => id.startsWith("binary_sensor.") || id.startsWith("sensor.")),
               (v) => this.updateFurniture({ status: v === "none" ? null : v }),
+            )}
+          </div>`
+        : nothing}
+      ${!lamp || f.entity
+        ? html`<label class="fp3d-check fp3d-wide" title=${this.t("device_confirm_hint")}
+            ><input type="checkbox" .checked=${!!f.confirm} ?disabled=${!this.isAdmin} @change=${(ev: Event) => this.updateFurniture({ confirm: (ev.target as HTMLInputElement).checked })} />
+            ${this.t("device_confirm")}</label
+          >
+          <div class="fp3d-form">${this.markerSelect(f.marker ?? null, (v) => this.updateFurniture({ marker: v }))}</div>`
+        : nothing}
+      ${f.type === "robot_vacuum"
+        ? html`<div class="fp3d-form fp3d-links">
+            ${this.entitySelect(
+              this.t("furn_robot_room"),
+              f.room_sensor ?? null,
+              robotRoomSensor(hass, furnitureEntities(hass, this._doc.floors).get(f.id)?.entity ?? null, null),
+              this.entityOptions((id) => id.startsWith("sensor.")),
+              (v) => this.updateFurniture({ room_sensor: v }),
             )}
           </div>`
         : nothing}

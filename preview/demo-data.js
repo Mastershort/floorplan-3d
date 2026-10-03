@@ -417,7 +417,7 @@ DEMO_BUILDING.floors[0].outdoor = [
 // solar inverter, home battery and wallbox on the back wall of the garage
 DEMO_BUILDING.floors[0].furniture.push(
   { ...item("inverter", 13.0, 0.11, 0.5, 0.2, 0.65), power: "sensor.pv_leistung" },
-  { ...item("home_battery", 12.3, 0.14, 0.6, 0.25, 1.1), power: "sensor.akku_leistung" },
+  { ...item("home_battery", 12.3, 0.14, 0.6, 0.25, 1.1), power: "sensor.akku_leistung", soc: "sensor.akku_ladestand" },
   item("wallbox", 10.6, 0.09, 0.3, 0.15, 0.42),
 );
 DEMO_BUILDING.settings = {

@@ -1,3 +1,5 @@
+![NeonPlan 3D 1.8.0: Solarfelder und Dachfenster](https://raw.githubusercontent.com/Mastershort/neonplan3d/main/docs/images/release-1.8.0.jpg)
+
 ### Neu
 
 - **Solarfelder auf dem Dach und im Garten:** Im neuen Werkzeug **Energie** legst du jetzt Solarmodule aufs Dach, in Reihen und Spalten, im Hoch- oder Querformat. Sie liegen genau in der Neigung der Dachfläche, auf einem Flachdach stehen sie aufgeständert (Winkel einstellbar). **+ Solarfeld** wählt die sonnigste Dachfläche und füllt sie, im Grundriss lässt sich das Feld mit der Maus verschieben. Dazu siehst du die Leistung des Feldes in kWp. Funktioniert auf dem einfachen Sattel- und Flachdach und auf allen Dachabschnitten. Mit **+ Frei aufgeständert** stellst du ein Feld auf Gestellen in den Garten oder auf ein flaches Garagendach (mit Höhe und Drehung, auch per Dreh-Griff im Grundriss), mit **+ An der Wand** hängst du Module an die Fassade oder den Balkon, flach oder schräg abstehend bis zum Vordach. Felder und Dachfenster lassen sich im Grundriss und in der 3D-Ansicht verschieben.
@@ -5,11 +7,13 @@
 - **Full Black** als Standard-Optik, Blau bleibt wählbar. Die **Modulgröße** ist einstellbar (Standard 1,13 × 1,72 m).
 - **Stränge:** Felder, die zusammen verschaltet sind, kommen in denselben Strang, auch über mehrere Dächer hinweg (z. B. 5 Module auf dem Haus und 5 auf der Garage). Ein Strang hat Namen, PV-Sensor und Wechselrichter.
 - **Dachfenster:** Im Werkzeug **Dach** setzt du Dachfenster in jede Dachfläche, verschiebbar wie Solarfelder. Mit Kontakt und Rollladen klappt der Flügel in 3D auf und der Rollladen fährt über die Scheibe.
-- **Wechselrichter, Stromspeicher und Wallbox** legst du im Werkzeug **Energie** unter **Geräte** an; sie landen von selbst in Garage oder Technikraum an einer Wand. Der Speicher zeigt seinen Ladestand (z. B. „64 % · ▲ 1,5 kW“), die Wallbox, ob sie lädt oder das Auto angesteckt ist. Mit einem Leistungssensor zeigen sie ihre Watt.
+- **Wechselrichter, Stromspeicher und Wallbox** legst du im Werkzeug **Energie** unter **Geräte** an; sie landen von selbst in Garage oder Technikraum an einer Wand. Der Speicher zeigt in 3D seinen Ladestand (z. B. „64 % · ▲ 1,5 kW“), die Wallbox, ob sie lädt oder das Auto angesteckt ist. Mit einem Leistungssensor zeigen sie ihre Watt.
 
 Bald folgt die Pro-Erweiterung **Solar & Energie**: Module, die bei Sonne leben, Stromflüsse durchs Haus und ein Hologramm mit den wichtigsten Werten.
 
 ---
+
+![NeonPlan 3D 1.8.0: solar fields and roof windows](https://raw.githubusercontent.com/Mastershort/neonplan3d/main/docs/images/release-1.8.0.jpg)
 
 ### New
 

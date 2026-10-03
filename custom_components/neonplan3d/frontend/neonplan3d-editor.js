@@ -1417,6 +1417,12 @@ var rt=globalThis,ot=rt.ShadowRoot&&(rt.ShadyCSS===void 0||rt.ShadyCSS.nativeSha
         ${this.entitySelect(this.t(s?"furn_entity_light":i?"furn_entity_tv":e.type==="radiator"?"furn_entity_climate":e.type==="robot_vacuum"?"furn_entity_vacuum":"furn_entity"),e.entity??null,n("entity"),r,d=>this.updateFurniture({entity:d}))}
         ${s?y:this.entitySelect(this.t("furn_power"),e.power??null,n("power"),a,d=>this.updateFurniture({power:d}))}
       </div>
+      ${e.type==="home_battery"?m`<div class="fp3d-form fp3d-links">
+            ${this.entitySelect(this.t("furn_soc"),e.soc??null,void 0,this.entityOptions(d=>d.startsWith("sensor.")&&(t.states[d]?.attributes.device_class==="battery"||t.states[d]?.attributes.unit_of_measurement==="%")),d=>this.updateFurniture({soc:d==="none"?null:d}))}
+          </div>`:y}
+      ${e.type==="wallbox"?m`<div class="fp3d-form fp3d-links">
+            ${this.entitySelect(this.t("furn_wallbox_status"),e.status??null,void 0,this.entityOptions(d=>d.startsWith("binary_sensor.")||d.startsWith("sensor.")),d=>this.updateFurniture({status:d==="none"?null:d}))}
+          </div>`:y}
       ${!s||e.entity?m`<label class="fp3d-check fp3d-wide" title=${this.t("device_confirm_hint")}
             ><input type="checkbox" .checked=${!!e.confirm} ?disabled=${!this.isAdmin} @change=${d=>this.updateFurniture({confirm:d.target.checked})} />
             ${this.t("device_confirm")}</label
@@ -1424,12 +1430,6 @@ var rt=globalThis,ot=rt.ShadowRoot&&(rt.ShadyCSS===void 0||rt.ShadyCSS.nativeSha
           <div class="fp3d-form">${this.markerSelect(e.marker??null,d=>this.updateFurniture({marker:d}))}</div>`:y}
       ${e.type==="robot_vacuum"?m`<div class="fp3d-form fp3d-links">
             ${this.entitySelect(this.t("furn_robot_room"),e.room_sensor??null,is(t,mn(t,this._doc.floors).get(e.id)?.entity??null,null),this.entityOptions(d=>d.startsWith("sensor.")),d=>this.updateFurniture({room_sensor:d}))}
-          </div>`:y}
-      ${e.type==="home_battery"?m`<div class="fp3d-form fp3d-links">
-            ${this.entitySelect(this.t("furn_soc"),e.soc??null,void 0,this.entityOptions(d=>d.startsWith("sensor.")&&(t.states[d]?.attributes.device_class==="battery"||t.states[d]?.attributes.unit_of_measurement==="%")),d=>this.updateFurniture({soc:d==="none"?null:d}))}
-          </div>`:y}
-      ${e.type==="wallbox"?m`<div class="fp3d-form fp3d-links">
-            ${this.entitySelect(this.t("furn_wallbox_status"),e.status??null,void 0,this.entityOptions(d=>d.startsWith("binary_sensor.")||d.startsWith("sensor.")),d=>this.updateFurniture({status:d==="none"?null:d}))}
           </div>`:y}
       ${e.type==="fridge_smart"?m`<div class="fp3d-form fp3d-links">
               ${this.entitySelect(this.t("furn_door_left"),e.door_left??null,void 0,l,d=>this.updateFurniture({door_left:d}))}
