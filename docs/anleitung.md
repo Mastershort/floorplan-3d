@@ -87,6 +87,8 @@ Oben gibt es drei Reiter:
 
 Zusätzlich gibt es die Dashboard-Karte, die dieselbe 3D-Ansicht in jedes Dashboard bringt. Mehr dazu in [Kapitel 8](#8-die-dashboard-karte).
 
+**Sprache:** NeonPlan folgt der Sprache deines Home-Assistant-Nutzers (Profil → Sprache). Deutsch und Englisch sind eingebaut; Französisch, Spanisch, Niederländisch und Italienisch werden bei Bedarf nachgeladen, so bleiben die Bundles für Wandtablets klein. Fehlt ein Text in einer Sprache, erscheint er auf Englisch.
+
 ---
 
 ## 4. Der Editor
@@ -155,6 +157,8 @@ Wände entstehen automatisch: Jede gemeinsame Kante zweier Räume wird eine Inne
 
 **Wandhöhe:** Jede Wand kann niedriger sein als der Raum, etwa als Brüstung oder Theke. Bei einer einzelnen Wand stellst du die **Höhe** im Formular ein. Bei Räumen (Rechteck und freie Form) wählst du den Raum aus; im Formular steht der Kasten **Wandhöhen** mit jeder Wand des Raums, benannt nach ihren Eckpunkten (z. B. „Wand 2–3“, die Nummern stehen im Plan an den Ecken) und mit ihrer Länge. Fährst du über eine Zeile oder tippst in ihr Feld, leuchtet die Wand im Plan auf. ↥ setzt sie auf volle Raumhöhe zurück. Teilen sich zwei Räume die Wand, gilt die niedrigere Einstellung. Fenster und Türen in einer niedrigen Wand enden an der Wandhöhe. Niedrige Wände erscheinen im Plan heller.
 
+**Keine Wand:** Bei offenen Grundrissen gehören Flur, Küche und Wohnzimmer baulich zusammen, sind in Home Assistant aber getrennte Bereiche. Dafür hat jede Zeile im Kasten **Wandhöhen** den Knopf **Keine Wand**: Die Wand fällt im Grundriss und in 3D ganz weg, auch wenn der Nachbarraum sie teilt. ↥ holt sie zurück.
+
 ### 4.5 Einstellungen
 
 Unten in der Seitenleiste klappt **Einstellungen** auf:
@@ -167,6 +171,7 @@ Unten in der Seitenleiste klappt **Einstellungen** auf:
 | **Dach** | Kein Dach, Flachdach oder Satteldach, mit Dachneigung und Dachüberstand. Beim Satteldach legt **First** fest, ob der First entlang der langen oder der kurzen Seite läuft (z. B. Reihenhaus). **Dachflächen (frei)** baut das Dach aus mehreren Teilen, siehe [4.19](#419-dach) |
 | **Wetter-Entität** | Welche Wetter-Entität das Wetter draußen liefert, siehe [6.2](#62-wetter-draußen) |
 | **Wetter-Effekte in 3D** | Welche Effekte gezeigt werden |
+| **Startansicht** | Drehe und zoome das Haus in der 3D-Ansicht rechts so, wie es sich öffnen soll (zum Beispiel von der Gartenseite), und drücke **Aktuelle 3D-Ansicht als Start merken**. 3D-Ansicht, Karte und Kiosk öffnen das Haus dann so; **Standard** setzt zurück |
 
 ### 4.6 Grundriss-Bild als Vorlage
 
@@ -388,7 +393,11 @@ Felder lassen sich im Grundriss und in der **3D-Ansicht daneben** mit der Maus v
 
 Unter dem Feld steht die Leistung, gerechnet mit 400 W je Modul. Die Grundriss-Sperre hält Solarfelder nicht fest; mit **🔓 Fixieren** im Formular lässt sich ein Feld (und genauso ein Dachfenster) aber einzeln festsetzen. **Geräte:** Wechselrichter, Stromspeicher und Wallbox legst du ebenfalls im Werkzeug **Energie** an, unter **Geräte**, auf der oben gewählten Etage. Die Wallbox kommt von selbst in die Garage, Wechselrichter und Speicher in einen Technikraum (HWR, Keller …), jeweils an eine Wand ohne Tür oder Tor, und der Grundriss springt hin. Ein Tipp auf ein Gerät in der Liste zeigt es im Grundriss. Dort trägt jedes Gerät im Werkzeug Energie eine runde Markierung mit Symbol (⚡ Wechselrichter, 🔋 Speicher, 🔌 Wallbox), an der man es anfasst und verschiebt, auch wenn darüber ein Solarfeld auf dem Dach liegt. Mit einem Leistungssensor zeigen sie ihre Watt. Der **Stromspeicher** zeigt mit dem Feld **Ladestand** zusätzlich seinen Ladestand, etwa „64 % · ▲ 1,5 kW“ (▲ lädt, ▼ entlädt), die **Wallbox** mit einem **Status**-Sensor „lädt · 11 kW“ oder „angesteckt“.
 
-Ganz unten kündigt eine Karte die kommende Pro-Erweiterung **Solar & Energie** an. Alles, was du hier einrichtest, bleibt kostenlos und wird von ihr direkt genutzt.
+**Stromzähler und Netzanschluss:** Der **Stromzähler** ist das vierte Energiegerät; er bekommt den Netzsensor (W, + = Bezug) und zeigt „Netzbezug 420 W“ oder „Einspeisung 900 W“. Der **Netzanschluss** markiert, wo die Leitung zum Stromanbieter das Grundstück verlässt, etwa am Ende der Einfahrt; er wird dort angelegt, wo die Leitung von selbst enden würde, und lässt sich im Grundriss verschieben. Jedes Gerät hat im Formular ein Feld **Name** („Wechselrichter Nord“), das in Liste, Formular und an den Pins in 3D erscheint, und Wechselrichter und Speicher ein **Modell**: Wandgerät, schmal und hoch oder Hybrid; Turm, Wandspeicher oder kompakter Balkonspeicher. Mehrere Wechselrichter und Speicher gehen, zum Beispiel eine große Anlage und ein Balkonkraftwerk: Jeder bekommt seinen eigenen Sensor.
+
+**Energiebilanz:** Netz, Solar und Akku holt NeonPlan von den Geräten im Plan (Zähler, Wechselrichter, Speicher; mehrere werden zusammengezählt, Ladestände gemittelt). Im Abschnitt **Energiebilanz** wählst du andere Sensoren, drehst Vorzeichen um und gibst den Hausverbrauch an. **Aus dem Energie-Dashboard übernehmen** holt die Sensoren, die du im Energie-Dashboard von Home Assistant eingetragen hast: zu jeder Energie-Statistik den Leistungssensor desselben Geräts. Prüfe danach die Vorzeichen.
+
+Ganz unten kündigt eine Karte die kommende Pro-Erweiterung **Energie Pro** an. Alles, was du hier einrichtest, bleibt kostenlos und wird von ihr direkt genutzt.
 
 ---
 

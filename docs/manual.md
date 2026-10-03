@@ -4,7 +4,7 @@
 
 NeonPlan 3D draws your home right inside Home Assistant and shows it as a 3D model in a neon look. Lights glow in their colours, blinds move, windows tilt, doors swing open, cameras look into the room and the TV shows what is playing. Everything runs locally in Home Assistant, without a cloud or external programs, and it is built for wall tablets.
 
-This manual describes every feature of the current version. What changed in which version is in the [changelog](../CHANGELOG.md) and on the [releases page](https://github.com/Mastershort/neonplan3d/releases). The pictures come from the demo with invented data. The app follows the language of your Home Assistant user; the labels below are the English ones.
+This manual describes every feature of the current version. What changed in which version is in the [changelog](../CHANGELOG.md) and on the [releases page](https://github.com/Mastershort/neonplan3d/releases). The pictures come from the demo with invented data. The app follows the language of your Home Assistant user (profile → language); the labels below are the English ones. German and English are built in; French, Spanish, Dutch and Italian are fetched when needed, so the bundles stay small for wall tablets. A text missing in a language shows in English.
 
 ![The house in the 3D view](images/view-house.jpg)
 
@@ -155,6 +155,8 @@ Walls are created automatically: every shared edge of two rooms becomes an inter
 
 **Wall height:** Any wall can be lower than the room, e.g. a parapet or a counter. For a single wall you set its **Height** in the form. For rooms (rectangle and free shape) select the room; the form shows the **Wall heights** box with every wall of the room, named by its corners (e.g. "Wall 2–3", the numbers are shown at the corners in the plan) and with its length. Hovering a row or tapping its field lights the wall up in the plan. ↥ resets it to full room height. If two rooms share the wall, the lower setting applies. Windows and doors in a low wall end at the wall height. Low walls look lighter in the plan.
 
+**No wall:** In open floor plans the hall, kitchen and living room are one space, yet separate areas in Home Assistant. For that, every row in the **Wall heights** box has a **No wall** button: the wall is left out in the plan and in 3D, even when the neighbouring room shares it. ↥ brings it back.
+
 ### 4.5 Settings
 
 **Settings** unfolds at the bottom of the sidebar:
@@ -167,6 +169,7 @@ Walls are created automatically: every shared edge of two rooms becomes an inter
 | **Roof** | No roof, flat roof or gable roof, with pitch and overhang. For a gable roof, **Ridge** sets whether the ridge runs along the long or the short side (e.g. terraced house). **Roof sections (custom)** builds the roof from several parts, see [4.19](#419-roof) |
 | **Weather entity** | Which weather entity drives the weather outside, see [6.2](#62-weather-outside) |
 | **Weather effects in 3D** | Which effects are shown |
+| **Start view** | Turn and zoom the house in the 3D pane on the right the way it should open (e.g. from the garden side) and press **Remember the current 3D view as the start**. The 3D view, the card and the kiosk then open the house like that; **Default** resets it |
 
 ### 4.6 Floor plan image as a template
 
@@ -388,7 +391,11 @@ Drag fields in the plan and in the **3D view beside it**, also onto another roof
 
 Below the field you see its power, counted with 400 W per module. The plan lock does not hold solar fields; **🔓 Fix** in the form fixes a single field (and a roof window just the same). **Devices:** solar inverters, home batteries and wallboxes are added in the **Energy** tool as well, under **Devices**, on the floor chosen at the top. A wallbox goes into the garage by itself, inverters and batteries into a utility room (utility room, basement …), each against a wall without a door or gate, and the plan moves there. Tapping a device in the list shows it in the plan. There, in the Energy tool, every device carries a round marker with a symbol (⚡ inverter, 🔋 battery, 🔌 wallbox) to grab and move it by, also below a solar field on the roof. With a power sensor they show their watts. The **home battery** also shows its charge with the **State of charge** field, e.g. "64 % · ▲ 1.5 kW" (▲ charging, ▼ discharging), the **wallbox** "charging · 11 kW" or "plugged in" with a **Status** sensor.
 
-At the bottom, a card announces the coming Pro add-on **Solar & Energy**. Everything you set up here stays free and is used by it directly.
+**Meter and grid connection:** The **electricity meter** is the fourth energy device; it takes the grid sensor (W, + = import) and shows "Grid import 420 W" or "Export 900 W". The **grid connection** marks where the cable to the utility leaves the plot, e.g. at the end of the driveway; it is added where the cable would end by itself and can be dragged in the plan. Every device has a **Name** field in its form ("Inverter north") that shows in the list, the form and on the pins in 3D, and inverters and batteries a **Model**: wall unit, slim and tall or hybrid; tower, wall battery or compact balcony battery. Several inverters and batteries work, e.g. a big plant and a balcony plant: each gets its own sensor.
+
+**Energy balance:** NeonPlan takes grid, solar and battery from the devices in the plan (meter, inverters, batteries; several add up, charges are averaged). In the **Energy balance** section you choose other sensors, flip signs and set the house consumption. **Take over from the energy dashboard** fetches the sensors you set up in Home Assistant's energy dashboard: for every energy statistic the power sensor of the same device. Check the signs afterwards.
+
+At the bottom, a card announces the coming Pro add-on **Energy Pro**. Everything you set up here stays free and is used by it directly.
 
 ---
 
