@@ -570,7 +570,7 @@ export class Fp3dView3d extends LitElement {
     v.setFlows(
       !pro || !(this.flows ?? this._flows) || this.dimmed
         ? []
-        : flowSegments({ building: b, consumers, summary, battery: batteryPlaced ?? null, fieldPower: powers }).map((f) => ({
+        : flowSegments({ building: b, consumers, summary, battery: batteryPlaced ?? null, fieldPower: powers, devicePower: this.devicePowers(hass, b) }).map((f) => ({
         floorId: f.floorId,
         a: f.a,
         b: f.b,
@@ -606,6 +606,20 @@ export class Fp3dView3d extends LitElement {
     // the hologram's day curve: the solar sensors' statistics, fetched now and then while the sun is watched
     const solarIds = pro && summary.solar !== null ? (b.energy.solar ? [b.energy.solar] : deviceSensors(b, (f) => this.furnitureLinks?.get(f.id)?.power ?? null).solar) : [];
     this.watchSolarDay(solarIds);
+  }
+
+  /** The inverters' and batteries' own power (W, a battery positive = discharging) by furniture id. */
+  private devicePowers(hass: HomeAssistant, b: Building): Map<string, number> {
+    const out = new Map<string, number>();
+    for (const floor of b.floors) {
+      for (const f of floor.furniture) {
+        if (f.type !== "inverter" && f.type !== "home_battery") continue;
+        const sensor = this.furnitureLinks?.get(f.id)?.power;
+        const p = sensor ? readPower(hass.states[sensor], f.type === "home_battery" && b.energy.battery_invert) : null;
+        if (p !== null) out.set(f.id, p);
+      }
+    }
+    return out;
   }
 
   /** The pin at the street: grid import or export right now. */

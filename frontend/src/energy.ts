@@ -8,7 +8,7 @@
 
 import { generateWalls } from "./geometry/walls.ts";
 import type { Building, EnergySettings, Floor, Furniture, Room, SolarField, Vec2 } from "./model.ts";
-import { fieldFace, fieldSize, roofFaces, topFloor, wallFaces } from "./solar.ts";
+import { fieldCenter, fieldFace, fieldSize, roofFaces, topFloor, wallFaces } from "./solar.ts";
 import { powerSensorsOf } from "./devices.ts";
 import { pointInPolygon, signedArea } from "./model.ts";
 import type { HassEntity, HomeAssistant } from "./types.ts";
@@ -58,8 +58,8 @@ type V3 = [number, number, number];
 export interface DeviceSensors {
   grid: string | null;
   solar: string[];
-  battery: string | null;
-  soc: string | null;
+  battery: string[];
+  soc: string[];
 }
 
 const ref = (v: string | null | undefined) => (v && v !== "none" ? v : null);
@@ -69,15 +69,16 @@ const ref = (v: string | null | undefined) => (v && v !== "none" ? v : null);
  * the one found on its device). Several inverters add up.
  */
 export function deviceSensors(building: Building, power: (f: Furniture) => string | null = (f) => ref(f.power)): DeviceSensors {
-  const out: DeviceSensors = { grid: null, solar: [], battery: null, soc: null };
+  const out: DeviceSensors = { grid: null, solar: [], battery: [], soc: [] };
   for (const floor of building.floors) {
     for (const f of floor.furniture) {
       const p = power(f);
       if (f.type === "meter") out.grid ??= p;
       else if (f.type === "inverter" && p && !out.solar.includes(p)) out.solar.push(p);
       else if (f.type === "home_battery") {
-        out.battery ??= p;
-        out.soc ??= ref(f.soc);
+        if (p && !out.battery.includes(p)) out.battery.push(p);
+        const soc = ref(f.soc);
+        if (soc && !out.soc.includes(soc)) out.soc.push(soc);
       }
     }
   }
@@ -191,10 +192,15 @@ export function energySummary(hass: HomeAssistant, building: Building, consumers
     const values = devices.solar.map((id) => readPower(hass.states[id])).filter((v): v is number => v !== null);
     solar = values.length ? values.reduce((a, b) => a + b, 0) : null;
   }
-  const batteryId = e.battery ?? devices.battery;
-  const battery = batteryId ? readPower(hass.states[batteryId], e.battery_invert) : null;
-  const socId = e.battery_soc ?? devices.soc;
-  const socState = socId ? Number(hass.states[socId]?.state) : NaN;
+  let battery: number | null = e.battery ? readPower(hass.states[e.battery], e.battery_invert) : null;
+  if (!e.battery && devices.battery.length) {
+    const values = devices.battery.map((id) => readPower(hass.states[id], e.battery_invert)).filter((v): v is number => v !== null);
+    battery = values.length ? values.reduce((a, b) => a + b, 0) : null;
+  }
+  // several batteries: their charge is averaged
+  const socIds = e.battery_soc ? [e.battery_soc] : devices.soc;
+  const socs = socIds.map((id) => Number(hass.states[id]?.state)).filter((v) => Number.isFinite(v));
+  const socState = socs.length ? socs.reduce((a, b) => a + b, 0) / socs.length : NaN;
   const tariffState = e.tariff ? hass.states[e.tariff] : undefined;
   const tariffValue = Number(tariffState?.state);
   let consumption: number | null = e.consumption ? readPower(hass.states[e.consumption]) : null;
@@ -356,6 +362,8 @@ export interface FlowInput {
   battery?: { floorId: string; x: number; z: number } | null;
   /** Pro: power of every solar field (W) for the cables from the roof to the inverter (none: no roof cables). */
   fieldPower?: Map<string, number> | null;
+  /** Pro: the energy devices' own sensors by furniture id (W; a battery positive = discharging). */
+  devicePower?: ReadonlyMap<string, number> | null;
 }
 
 /** Cable route independent of the current power: which targets each piece feeds. */
@@ -455,17 +463,34 @@ function planRoutes(building: Building, targets: Target[]): PlannedSegment[] {
 }
 
 /** All cable segments: consumers (tree from the meter), grid feed, solar riser and battery cable. */
-export function flowSegments({ building, consumers, summary, battery, fieldPower }: FlowInput): FlowSegment[] {
+export function flowSegments({ building, consumers, summary, battery, fieldPower, devicePower }: FlowInput): FlowSegment[] {
   const meter = meterPosition(building);
   if (!meter) return [];
   const meterFloor = building.floors.find((f) => f.id === meter.floor_id);
   if (!meterFloor) return [];
+  const own = (id: string) => devicePower?.get(id);
+  const inverters = devicesOf(building, "inverter");
+  const batteries = devicesOf(building, "home_battery");
+  // older plans: the battery sensor placed on its own stands for a battery
+  if (!batteries.length && battery) batteries.push({ id: "battery", type: "home_battery", floorId: battery.floorId, x: battery.x, z: battery.z, h: 1.1, variant: null });
+  const nearest = (p: { floorId: string; x: number; z: number }) => {
+    let best: DevicePos | null = null;
+    for (const inv of inverters) {
+      if (inv.floorId !== p.floorId) continue;
+      if (!best || Math.hypot(inv.x - p.x, inv.z - p.z) < Math.hypot(best.x - p.x, best.z - p.z)) best = inv;
+    }
+    return best;
+  };
+  // every battery hangs on the nearest inverter of its floor (a hybrid inverter), else on the meter
+  const batteryPower = (bat: DevicePos) => own(bat.id) ?? (batteries.length === 1 ? (summary.battery ?? 0) : 0);
+  const onInverter = new Map<string, DevicePos>();
+  for (const bat of batteries) {
+    const inv = nearest(bat);
+    if (inv) onInverter.set(bat.id, inv);
+  }
 
   const targets: (Target & { power: number })[] = consumers.map((c) => ({ floorId: c.floorId, x: c.x, z: c.z, kind: (c.wallbox ? "wallbox" : "consumer") as FlowKind, power: c.power }));
-  // the battery hangs on the inverter when both stand on one floor (a hybrid inverter), else on the meter
-  const inverter = devicePosition(building, "inverter");
-  const batteryOnInverter = !!battery && !!inverter && battery.floorId === inverter.floorId;
-  if (battery && summary.battery !== null && !batteryOnInverter) targets.push({ ...battery, kind: "battery", power: Math.abs(summary.battery) });
+  for (const bat of batteries) if (!onInverter.has(bat.id) && summary.battery !== null) targets.push({ floorId: bat.floorId, x: bat.x, z: bat.z, kind: "battery", power: Math.abs(batteryPower(bat)) });
   const key = `${meter.floor_id}:${meter.x},${meter.z}|${targets.map((t) => `${t.floorId}:${t.x},${t.z}:${t.kind}`).join(";")}`;
   let perBuilding = planCache.get(building);
   if (!perBuilding) planCache.set(building, (perBuilding = new Map()));
@@ -490,36 +515,56 @@ export function flowSegments({ building, consumers, summary, battery, fieldPower
   if (street) {
     const importing = summary.grid! >= 0;
     const route: V3[] = [[street.end[0], CABLE_Y, street.end[1]], [street.wall[0], CABLE_Y, street.wall[1]], [meter.x, CABLE_Y, meter.z]];
-    const pieces = polyline(meterFloor.id, importing ? route : [...route].reverse(), Math.abs(summary.grid!), importing ? "grid" : "export", 0);
-    out.push(...pieces);
+    out.push(...polyline(meterFloor.id, importing ? route : [...route].reverse(), Math.abs(summary.grid!), importing ? "grid" : "export", 0));
   }
-  // the battery cable flows towards the meter when discharging
+  // the battery cable (on the meter) flows towards the meter when discharging
   if (summary.battery !== null && summary.battery > 0) {
     for (const s of out) if (s.kind === "battery") [s.a, s.b] = [s.b, s.a];
   }
+
+  // the solar fields: each to its string's inverter, else the nearest one, else the meter
   const fields = building.settings.roof.solar ?? [];
-  const roofCables = !!fieldPower && fields.length > 0;
-  if (inverter) {
-    // the inverter feeds the meter with the sun and the battery's discharge, and charges the battery
-    const feed = Math.max(0, (summary.solar ?? 0) + (batteryOnInverter ? Math.max(0, summary.battery ?? 0) : 0) - (batteryOnInverter ? Math.max(0, -(summary.battery ?? 0)) : 0));
-    const invTop = deviceTop(building, "inverter");
-    if (summary.solar !== null || summary.battery !== null) {
-      for (const s of deviceRoute(building, inverter, invTop, { ...meter, floorId: meter.floor_id }, 1.5, feed, "inverter", 0)) out.push(s);
+  const strings = building.settings.roof.strings ?? [];
+  const fieldsOf = new Map<string, number>();
+  if (fieldPower && fields.length) {
+    const faces = [...roofFaces(building), ...wallFaces(building)];
+    for (const f of fields) {
+      const power = fieldPower.get(f.id) ?? 0;
+      const named = f.string ? strings.find((x) => x.id === f.string)?.inverter : null;
+      let inv = named ? (inverters.find((x) => x.id === named) ?? null) : null;
+      if (!inv && inverters.length) {
+        const face = fieldFace(building, f, faces);
+        const c = face ? fieldCenter(face, f) : [f.u, f.v];
+        inv = inverters.reduce((best, x) => (!best || Math.hypot(x.x - c[0], x.z - c[1]) < Math.hypot(best.x - c[0], best.z - c[1]) ? x : best), null as DevicePos | null);
+      }
+      if (inv) fieldsOf.set(inv.id, (fieldsOf.get(inv.id) ?? 0) + power);
+      const target = inv ?? { floorId: meter.floor_id, x: meter.x, z: meter.z };
+      out.push(...solarRoute(building, f, power, target, inv ? 1.1 + inv.h : 1.5));
     }
-    if (batteryOnInverter && summary.battery !== null) {
-      const charging = summary.battery < 0;
-      const route = deviceRoute(building, inverter, invTop - 0.1, battery!, 0.9, Math.abs(summary.battery), "battery", 0);
-      out.push(...(charging ? route : route.map((s) => ({ ...s, a: s.b, b: s.a })).reverse()));
-    }
-  }
-  if (roofCables) {
-    // every field's cable: down the roof, the facade and along the outer walls to the inverter (or the meter)
-    const target = inverter ?? { floorId: meter.floor_id, x: meter.x, z: meter.z };
-    const top = inverter ? deviceTop(building, "inverter") : 1.5;
-    for (const f of fields) out.push(...solarRoute(building, f, fieldPower.get(f.id) ?? 0, target, top));
-  } else if (summary.solar !== null && !inverter) {
+  } else if (summary.solar !== null && !inverters.length) {
     // older plans without fields or an inverter: the sun comes down from above the ceiling to the meter
     out.push({ floorId: meterFloor.id, a: [meter.x + 0.08, meterFloor.height + 0.6, meter.z + 0.08], b: [meter.x + 0.08, CABLE_Y, meter.z + 0.08], dist: 0, power: summary.solar, kind: "solar" });
+  }
+
+  // every inverter feeds the meter: with its own sensor, else with its fields' sun and its batteries' discharge
+  for (const inv of inverters) {
+    const invTop = 1.1 + inv.h;
+    const mine = batteries.filter((bat) => onInverter.get(bat.id) === inv);
+    let feed = own(inv.id);
+    if (feed === undefined) {
+      feed = fieldsOf.get(inv.id) ?? (inverters.length === 1 ? (summary.solar ?? 0) : 0);
+      for (const bat of mine) feed += batteryPower(bat);
+    }
+    if (summary.solar !== null || summary.battery !== null) {
+      out.push(...deviceRoute(building, inv, invTop, { floorId: meter.floor_id, x: meter.x, z: meter.z }, 1.5, Math.max(0, feed), "inverter", 0));
+    }
+    for (const bat of mine) {
+      const p = batteryPower(bat);
+      if (summary.battery === null && own(bat.id) === undefined) continue;
+      const route = deviceRoute(building, inv, invTop - 0.1, bat, bat.variant === "wall" ? 0.5 + bat.h : 0.9, Math.abs(p), "battery", 0);
+      // charging: from the inverter to the battery; discharging: the other way round
+      out.push(...(p <= 0 ? route : route.map((s) => ({ ...s, a: s.b, b: s.a })).reverse()));
+    }
   }
   return out;
 }
@@ -527,9 +572,13 @@ export function flowSegments({ building, consumers, summary, battery, fieldPower
 // ------------------------------------------------------------------ Pro: the roof and the devices
 
 interface DevicePos {
+  id: string;
+  type: string;
   floorId: string;
   x: number;
   z: number;
+  h: number;
+  variant: string | null;
 }
 
 /**
@@ -542,9 +591,29 @@ export function gridPoint(building: Building): { floorId: string; wall: Vec2; en
   if (!meter || !floor) return null;
   const { wall_exterior: ext, wall_interior: int } = building.settings;
   const { walls } = generateWalls(floor.rooms, { exterior: ext, interior: int }, floor.walls ?? []);
+  const set = devicesOf(building, "grid_point")[0];
+  const exterior = walls.filter((w) => w.exterior);
+  if (set) {
+    // the way out: where the straight line from the meter to the set point crosses an exterior wall first
+    let hit: { q: Vec2; out: Vec2; t: number } | null = null;
+    for (const w of exterior) {
+      const ex = w.b[0] - w.a[0];
+      const ez = w.b[1] - w.a[1];
+      const dx = set.x - meter.x;
+      const dz = set.z - meter.z;
+      const den = dx * ez - dz * ex;
+      if (Math.abs(den) < 1e-9) continue;
+      const t = ((w.a[0] - meter.x) * ez - (w.a[1] - meter.z) * ex) / den;
+      const u = ((w.a[0] - meter.x) * dz - (w.a[1] - meter.z) * dx) / den;
+      if (t <= 0 || t > 1 || u < 0 || u > 1 || (hit && t >= hit.t)) continue;
+      const l = Math.hypot(ex, ez) || 1;
+      hit = { q: [meter.x + dx * t, meter.z + dz * t], out: [ez / l, -ex / l], t };
+    }
+    const wall: Vec2 = hit ? [hit.q[0] + hit.out[0] * (ext / 2 + 0.05), hit.q[1] + hit.out[1] * (ext / 2 + 0.05)] : [meter.x, meter.z];
+    return { floorId: floor.id, wall, end: [set.x, set.z] };
+  }
   let best: { q: Vec2; out: Vec2; d: number } | null = null;
-  for (const w of walls) {
-    if (!w.exterior) continue;
+  for (const w of exterior) {
     const dx = w.b[0] - w.a[0];
     const dz = w.b[1] - w.a[1];
     const l2 = dx * dx + dz * dz || 1;
@@ -556,42 +625,33 @@ export function gridPoint(building: Building): { floorId: string; wall: Vec2; en
   }
   if (!best) return null;
   const { q, out } = best;
-  // along the way out: the farthest edge of any outdoor area it crosses (the plot's border), at most 15 m
+  // along the way out: the farthest edge of any outdoor area (on any floor) it crosses – the plot's border, at most 15 m
   let far = 0;
-  for (const area of floor.outdoor ?? []) {
-    const n = area.points.length;
-    for (let i = 0; i < n; i++) {
-      const a = area.points[i];
-      const c = area.points[(i + 1) % n];
-      const ex = c[0] - a[0];
-      const ez = c[1] - a[1];
-      const den = out[0] * ez - out[1] * ex;
-      if (Math.abs(den) < 1e-9) continue;
-      const t = ((a[0] - q[0]) * ez - (a[1] - q[1]) * ex) / den;
-      const u = ((a[0] - q[0]) * out[1] - (a[1] - q[1]) * out[0]) / den;
-      if (t > 0 && u >= 0 && u <= 1) far = Math.max(far, Math.min(15, t));
+  for (const fl of building.floors) {
+    for (const area of fl.outdoor ?? []) {
+      const n = area.points.length;
+      for (let i = 0; i < n; i++) {
+        const a = area.points[i];
+        const c = area.points[(i + 1) % n];
+        const ex = c[0] - a[0];
+        const ez = c[1] - a[1];
+        const den = out[0] * ez - out[1] * ex;
+        if (Math.abs(den) < 1e-9) continue;
+        const t = ((a[0] - q[0]) * ez - (a[1] - q[1]) * ex) / den;
+        const u = ((a[0] - q[0]) * out[1] - (a[1] - q[1]) * out[0]) / den;
+        if (t > 0 && u >= 0 && u <= 1) far = Math.max(far, Math.min(15, t));
+      }
     }
   }
   const t = far > ext + 1 ? far : ext + 2.5;
   return { floorId: floor.id, wall: [q[0] + out[0] * (ext / 2 + 0.05), q[1] + out[1] * (ext / 2 + 0.05)], end: [q[0] + out[0] * t, q[1] + out[1] * t] };
 }
 
-/** The first energy device of a type in the plan (where its cables start or end). */
-export function devicePosition(building: Building, type: Furniture["type"]): DevicePos | null {
-  for (const floor of building.floors) {
-    const m = floor.furniture.find((f) => f.type === type);
-    if (m) return { floorId: floor.id, x: m.x, z: m.z };
-  }
-  return null;
-}
-
-/** Height (above its floor) where a wall device's cables leave it: its top edge. */
-function deviceTop(building: Building, type: Furniture["type"]): number {
-  for (const floor of building.floors) {
-    const m = floor.furniture.find((f) => f.type === type);
-    if (m) return (type === "inverter" ? 1.1 : type === "meter" ? 0.4 : 0) + m.h;
-  }
-  return 1.5;
+/** All energy devices of a type in the plan (where cables start or end). */
+export function devicesOf(building: Building, type: Furniture["type"]): DevicePos[] {
+  const out: DevicePos[] = [];
+  for (const floor of building.floors) for (const m of floor.furniture) if (m.type === type) out.push({ id: m.id, type: m.type, floorId: floor.id, x: m.x, z: m.z, h: m.h, variant: m.variant ?? null });
+  return out;
 }
 
 /** Cables between two devices on one floor along the walls of the rooms (like the meter's tree), at floor level. */
@@ -628,7 +688,7 @@ function roomPath(building: Building, floor: Floor, from: Vec2, to: Vec2): Vec2[
 }
 
 /** A cable from a device down its wall, along the rooms' walls and up to the other device. */
-function deviceRoute(building: Building, from: DevicePos, fromY: number, to: DevicePos, toY: number, power: number, kind: FlowKind, dist: number): FlowSegment[] {
+function deviceRoute(building: Building, from: { floorId: string; x: number; z: number }, fromY: number, to: { floorId: string; x: number; z: number }, toY: number, power: number, kind: FlowKind, dist: number): FlowSegment[] {
   const floor = building.floors.find((f) => f.id === from.floorId);
   if (!floor || from.floorId !== to.floorId) return [];
   const path = roomPath(building, floor, [from.x, from.z], [to.x, to.z]);
@@ -700,7 +760,7 @@ function absolutePolyline(building: Building, pts: V3[], power: number, kind: Fl
  * The cable of a solar field: down the slope to the eave, down the facade, along the outer walls and in to the
  * inverter (building coordinates; a garden field runs along the ground, a wall field straight down its wall).
  */
-function solarRoute(building: Building, f: SolarField, power: number, target: DevicePos, targetY: number): FlowSegment[] {
+function solarRoute(building: Building, f: SolarField, power: number, target: { floorId: string; x: number; z: number }, targetY: number): FlowSegment[] {
   const faces = [...roofFaces(building), ...wallFaces(building)];
   const face = fieldFace(building, f, faces);
   const floor = building.floors.find((x) => x.id === target.floorId);

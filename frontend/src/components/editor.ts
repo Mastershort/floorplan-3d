@@ -11,7 +11,7 @@ import { holeInRoom } from "../geometry/holes.ts";
 import { weatherEntity } from "../weather.ts";
 import { SHOW_PRESENCE } from "../flags.ts";
 import { hasFeature, manualUrl, shopUrl } from "../features.ts";
-import { deviceSensors, proposeEnergySensors, type EnergyPrefs } from "../energy.ts";
+import { deviceSensors, gridPoint, proposeEnergySensors, type EnergyPrefs } from "../energy.ts";
 import { isStatusSensor, robotRoomSensor, TOGGLE_KINDS } from "../devices.ts";
 import { ridgeHeight, roofSectionsFromRooms, sectionFrame, sectionProfile, wallTopUnder } from "../roof-sections.ts";
 import { bestFace, clampField, faceAt, faceCompass, fieldFace, fieldModules, GROUND, pointOnFace, proposeField, proposeGroundField, proposeWindow, proposeWallField, roofFaces, rowCounts, turnGroundField, fieldCenter, wallFaces, windowAsField, windowCorners, onFace, onField, rayOnFace, type RoofFace } from "../solar.ts";
@@ -2333,7 +2333,7 @@ export class Fp3dEditor extends LitElement {
   private renderEnergyMarkers() {
     const floor = this.floor;
     if (!floor) return nothing;
-    const icons: Record<string, string> = { inverter: "⚡", home_battery: "🔋", wallbox: "🔌" };
+    const icons: Record<string, string> = { inverter: "⚡", home_battery: "🔋", wallbox: "🔌", meter: "📟", grid_point: "🏁" };
     return svg`<g class="fp3d-energy-markers">${floor.furniture
       .filter((m) => (ENERGY_DEVICES as readonly string[]).includes(m.type))
       .map((m) => {
@@ -2776,6 +2776,17 @@ export class Fp3dEditor extends LitElement {
   private addEnergyDevice(type: string): void {
     const floor = this.floor;
     if (!floor || !this.isAdmin) return;
+    if (type === "grid_point") {
+      // the grid connection goes where the cable would reach the street by itself; then it can be dragged
+      const auto = gridPoint(this._doc);
+      const [gw, gd, gh] = furnitureSize(type);
+      const [gx, gz] = auto ? auto.end : this.toWorld(this._size.w / 2, this._size.h / 2);
+      const point: Furniture = { id: uid("furniture"), type, x: round(gx), z: round(gz), rotation: 0, w: gw, d: gd, h: gh, variant: null };
+      this.change((_, f) => f.furniture.push(point));
+      this.selectItem("furniture", point.id);
+      this.showPoint(point.x, point.z);
+      return;
+    }
     const areaName = (r: Room) => `${r.name} ${(r.area_id && this.hass?.areas?.[r.area_id]?.name) || ""} ${r.area_id ?? ""}`.toLowerCase();
     const rooms = floor.rooms.filter((r) => r.points.length >= 3);
     const find = (re: RegExp) => rooms.find((r) => re.test(areaName(r)));
@@ -4568,6 +4579,18 @@ export class Fp3dEditor extends LitElement {
               ? html`<p class="fp3d-sub fp3d-pack-error">${this.t("stairwell_outside")}</p>`
               : nothing}`
         : nothing}
+      ${f.type === "inverter" || f.type === "home_battery"
+        ? html`<div class="fp3d-form">
+            <label class="fp3d-field fp3d-wide"
+              >${this.t("furn_model")}
+              <select ?disabled=${!admin} @change=${(e: Event) => this.updateFurniture({ variant: (e.target as HTMLSelectElement).value || null })}>
+                ${(f.type === "inverter" ? (["", "slim", "hybrid"] as const) : (["", "wall", "cube"] as const)).map(
+                  (v) => html`<option value=${v} ?selected=${(f.variant ?? "") === v}>${this.t(`${f.type === "inverter" ? "inverter" : "battery"}_${v || "std"}` as I18nKey)}</option>`,
+                )}
+              </select></label
+            >
+          </div>`
+        : nothing}
       ${f.type === "lamp_pendant"
         ? html`<div class="fp3d-form">
             <label class="fp3d-field fp3d-wide"
@@ -4639,12 +4662,12 @@ export class Fp3dEditor extends LitElement {
           ${this.t("energy_invert")}</label
         >
         ${this.entitySelect(this.t("energy_solar_sensor"), e.solar, devices.solar[0] ?? null, power, pick("solar"))}
-        ${this.entitySelect(this.t("energy_battery_sensor"), e.battery, devices.battery, power, pick("battery"))}
+        ${this.entitySelect(this.t("energy_battery_sensor"), e.battery, devices.battery[0] ?? null, power, pick("battery"))}
         <label class="fp3d-check fp3d-wide"
           ><input type="checkbox" .checked=${e.battery_invert} ?disabled=${!admin} @change=${(ev: Event) => this.setEnergy({ battery_invert: (ev.target as HTMLInputElement).checked })} />
           ${this.t("energy_invert")}</label
         >
-        ${this.entitySelect(this.t("energy_battery_soc"), e.battery_soc, devices.soc, soc, pick("battery_soc"))}
+        ${this.entitySelect(this.t("energy_battery_soc"), e.battery_soc, devices.soc[0] ?? null, soc, pick("battery_soc"))}
         ${this.entitySelect(this.t("energy_consumption_sensor"), e.consumption, null, power, pick("consumption"))}
         ${this.entitySelect(this.t("energy_tariff_sensor"), e.tariff, undefined, tariff, pick("tariff"))}
       </div>
@@ -4720,10 +4743,12 @@ export class Fp3dEditor extends LitElement {
     const power = this.entityOptions((id) => id.startsWith("sensor.") && hass.states[id]?.attributes.device_class === "power");
     const doorSensors = f.type === "fridge_smart" ? this.entityOptions((id) => id.startsWith("binary_sensor.")) : [];
     return html`<div class="fp3d-form fp3d-links">
-        ${this.entitySelect(this.t(lamp ? "furn_entity_light" : media ? "furn_entity_tv" : f.type === "radiator" ? "furn_entity_climate" : f.type === "robot_vacuum" ? "furn_entity_vacuum" : "furn_entity"), f.entity ?? null, autoPick("entity"), entities, (v) =>
-          this.updateFurniture({ entity: v }),
-        )}
-        ${lamp
+        ${f.type === "grid_point"
+          ? html`<p class="fp3d-sub fp3d-wide">${this.t("grid_point_hint")}</p>`
+          : this.entitySelect(this.t(lamp ? "furn_entity_light" : media ? "furn_entity_tv" : f.type === "radiator" ? "furn_entity_climate" : f.type === "robot_vacuum" ? "furn_entity_vacuum" : "furn_entity"), f.entity ?? null, autoPick("entity"), entities, (v) =>
+              this.updateFurniture({ entity: v }),
+            )}
+        ${lamp || f.type === "grid_point"
           ? nothing
           : this.entitySelect(
               this.t(f.type === "meter" ? "energy_grid" : f.type === "inverter" ? "energy_solar_sensor" : f.type === "home_battery" ? "energy_battery_sensor" : "furn_power"),

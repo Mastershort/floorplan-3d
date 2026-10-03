@@ -690,14 +690,48 @@ function radiator(b: Builder, w: number, d: number, h: number): void {
   }
 }
 
-/** Solar inverter on the wall (from 1.1 m): a flat box with a display and a status line. */
-function inverter(b: Builder, w: number, d: number, h: number): void {
+/** A ring of glowing line on a front face (z = front), for dials and fans. */
+function ring(b: Builder, cx: number, cy: number, r: number, z: number, n = 20): void {
+  for (let i = 0; i < n; i++) {
+    const a0 = (i / n) * Math.PI * 2;
+    const a1 = ((i + 1) / n) * Math.PI * 2;
+    b.seg(cx + Math.cos(a0) * r, cy + Math.sin(a0) * r, z, cx + Math.cos(a1) * r, cy + Math.sin(a1) * r, z, EDGE_GLOW);
+  }
+}
+
+/**
+ * Solar inverter on the wall (from 1.1 m): a flat box with a display and a status line; "slim" a tall narrow
+ * one with a vertical light strip; "hybrid" with a round dial and two fans below.
+ */
+function inverter(b: Builder, w: number, d: number, h: number, variant: string | null): void {
   const y0 = 1.1;
+  const z = d / 2;
+  if (variant === "slim") {
+    b.box(-w / 2, w / 2, y0, y0 + h, -d / 2, d / 2, C.dark, C.body, EDGE_FURN);
+    b.seg(-w * 0.25, y0 + h * 0.15, z + 0.004, -w * 0.25, y0 + h * 0.85, z + 0.004, EDGE_GLOW);
+    b.box(-w * 0.1, w * 0.3, y0 + h * 0.7, y0 + h * 0.85, z, z + 0.005, C.dark);
+    return;
+  }
+  if (variant === "hybrid") {
+    b.box(-w / 2, w / 2, y0, y0 + h, -d / 2, d / 2, C.white, C.whiteTop, EDGE_FURN);
+    ring(b, 0, y0 + h * 0.66, Math.min(w, h) * 0.22, z + 0.004);
+    b.seg(-w * 0.08, y0 + h * 0.66, z + 0.005, w * 0.08, y0 + h * 0.66, z + 0.005, EDGE_GLOW);
+    for (const s of [-1, 1]) ring(b, s * w * 0.22, y0 + h * 0.2, Math.min(w, h) * 0.1, -d / 2 - 0.002, 12);
+    return;
+  }
   b.box(-w / 2, w / 2, y0, y0 + h, -d / 2, d / 2, C.white, C.whiteTop, EDGE_FURN);
   b.box(-w * 0.28, w * 0.28, y0 + h * 0.58, y0 + h * 0.82, d / 2, d / 2 + 0.006, C.dark);
   b.seg(-w * 0.3, y0 + h * 0.45, d / 2 + 0.004, w * 0.3, y0 + h * 0.45, d / 2 + 0.004, EDGE_GLOW);
   // cooling fins at the sides
   for (const s of [-1, 1]) for (let i = 1; i < 6; i++) b.seg((s * w) / 2 + s * 0.002, y0 + (h * i) / 6, -d / 2 + 0.03, (s * w) / 2 + s * 0.002, y0 + (h * i) / 6, d / 2 - 0.03, EDGE_FAINT);
+}
+
+/** The grid connection at the edge of the plot: a small dark street cabinet with a glowing lid edge. */
+function gridCabinet(b: Builder, w: number, d: number, h: number): void {
+  b.box(-w / 2, w / 2, 0, h, -d / 2, d / 2, C.dark, C.body, EDGE_FURN);
+  b.box(-w / 2 - 0.01, w / 2 + 0.01, h, h + 0.03, -d / 2 - 0.01, d / 2 + 0.01, C.dark, C.body);
+  b.seg(-w / 2, h + 0.032, d / 2 + 0.01, w / 2, h + 0.032, d / 2 + 0.01, EDGE_GLOW);
+  b.seg(-w * 0.3, h * 0.55, d / 2 + 0.003, w * 0.3, h * 0.55, d / 2 + 0.003, EDGE_FAINT);
 }
 
 /** Wallbox (from 1.0 m): a compact box with a glowing ring and the charging cable hanging below. */
@@ -730,8 +764,25 @@ function meterCabinet(b: Builder, w: number, d: number, h: number): void {
   b.seg(-w * 0.22, y0 + h * 0.7, d / 2 + 0.008, w * 0.22, y0 + h * 0.7, d / 2 + 0.008, EDGE_GLOW);
 }
 
-/** Home battery on the floor: stacked modules with a charge bar on the front. */
-function homeBattery(b: Builder, w: number, d: number, h: number): void {
+/**
+ * Home battery: a tower of stacked modules with a charge bar; "wall" a flat battery hanging at hip height
+ * with a light bar; "cube" a compact box (a balcony battery) with a light bar and a handle.
+ */
+function homeBattery(b: Builder, w: number, d: number, h: number, variant: string | null): void {
+  if (variant === "wall") {
+    const y0 = 0.5;
+    b.box(-w / 2, w / 2, y0, y0 + h, -d / 2, d / 2, C.white, C.whiteTop, EDGE_FURN);
+    b.seg(-w * 0.3, y0 + h * 0.9, d / 2 + 0.004, w * 0.3, y0 + h * 0.9, d / 2 + 0.004, EDGE_GLOW);
+    b.seg(-w * 0.3, y0 + h * 0.08, d / 2 + 0.003, w * 0.3, y0 + h * 0.08, d / 2 + 0.003, EDGE_FAINT);
+    return;
+  }
+  if (variant === "cube") {
+    b.box(-w / 2 + 0.01, w / 2 - 0.01, 0, 0.03, -d / 2 + 0.01, d / 2 - 0.01, C.dark);
+    b.box(-w / 2, w / 2, 0.03, h, -d / 2, d / 2, C.dark, C.body, EDGE_FURN);
+    b.seg(-w * 0.35, h * 0.85, d / 2 + 0.004, w * 0.35, h * 0.85, d / 2 + 0.004, EDGE_GLOW);
+    b.box(-w * 0.15, w * 0.15, h, h + 0.025, -0.012, 0.012, C.dark);
+    return;
+  }
   b.box(-w / 2 + 0.02, w / 2 - 0.02, 0, 0.06, -d / 2 + 0.02, d / 2 - 0.02, C.dark);
   const modules = Math.max(2, Math.round((h - 0.06) / 0.3));
   const mh = (h - 0.06) / modules;
@@ -986,8 +1037,11 @@ function buildFurniture(buf: GeoBuffer, lines: LineBuffer, shadow: GeoBuffer, f:
       radiator(b, w, d, h);
       return; // on the wall, no shadow on the floor
     case "inverter":
-      inverter(b, w, d, h);
+      inverter(b, w, d, h, f.variant ?? null);
       return;
+    case "grid_point":
+      gridCabinet(b, w, d, h);
+      break;
     case "wallbox":
       wallbox(b, w, d, h);
       return;
@@ -995,7 +1049,8 @@ function buildFurniture(buf: GeoBuffer, lines: LineBuffer, shadow: GeoBuffer, f:
       meterCabinet(b, w, d, h);
       return;
     case "home_battery":
-      homeBattery(b, w, d, h);
+      homeBattery(b, w, d, h, f.variant ?? null);
+      if (f.variant === "wall") return;
       break;
     default: {
       const item = packItem(f.type);

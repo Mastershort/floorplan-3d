@@ -577,6 +577,7 @@ export const FURNITURE_TYPES = [
   "home_battery",
   "wallbox",
   "meter",
+  "grid_point",
   "parking",
   "fridge_smart",
   "stairwell",
@@ -595,7 +596,7 @@ export const FURNITURE_GROUPS: Record<string, FurnitureType[]> = {
 };
 
 /** Energy devices: placed and set up in the Energy tool (stored like furniture, not in the library). */
-export const ENERGY_DEVICES = ["meter", "inverter", "home_battery", "wallbox"] as const;
+export const ENERGY_DEVICES = ["meter", "inverter", "home_battery", "wallbox", "grid_point"] as const;
 
 /** Furniture that can show a linked entity (TV state, power, …). */
 /** Lamps: drawn live (they glow with their light) and tapped directly in 3D. */
@@ -677,8 +678,11 @@ export function step(p: Vec2, length: number, dir: Direction): Vec2 {
  * Height of the bottom of a built-in model as drawn (a wall cabinet hangs at 1.45 m, a wall TV is
  * centred at 1.3 m, a radiator stands on short brackets); the mount height replaces it.
  */
-export function builtinBase(f: Pick<Furniture, "type" | "h">): number {
+export function builtinBase(f: Pick<Furniture, "type" | "h"> & { variant?: string | null }): number {
   switch (f.type) {
+    case "home_battery":
+      // a wall battery hangs at hip height
+      return f.variant === "wall" ? 0.5 : 0;
     case "kitchen_wall":
       return 1.45;
     case "tv_wall":
@@ -749,6 +753,8 @@ export const FURNITURE_SIZE: Record<FurnitureType, [number, number, number]> = {
   wallbox: [0.3, 0.15, 0.42],
   // the meter cabinet hangs on the wall as well
   meter: [0.55, 0.21, 1.1],
+  // the grid connection: a small street cabinet at the edge of the plot
+  grid_point: [0.4, 0.22, 0.6],
   fridge: [0.6, 0.65, 1.8],
   fridge_smart: [0.91, 0.73, 1.78],
   stairwell: [1.0, 2.6, 0.02],
