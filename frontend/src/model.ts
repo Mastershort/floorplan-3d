@@ -97,6 +97,8 @@ export interface Furniture {
   d: number;
   h: number;
   variant: string | null;
+  /** Own name (e.g. "Wechselrichter Nord"); null = the type's name. */
+  name?: string | null;
   /** Linked entity, e.g. the TV's media player (null = automatic, "none" = none). */
   entity?: EntityRef;
   /** Power sensor (null = automatic: the linked entity's device or a matching name). */
@@ -251,6 +253,8 @@ export interface RoofSettings {
   windows?: RoofWindow[];
   /** Energie Pro: the hologram's place and size. */
   hologram?: HologramSettings | null;
+  /** Energie Pro: cables laid by hand (the others find their own way). */
+  cables?: CableRoute[];
 }
 
 /**
@@ -312,6 +316,17 @@ export interface HologramSettings {
 }
 
 export const DEFAULT_HOLOGRAM: HologramSettings = { field: null, size: 1, right: 0, up: 0 };
+
+/**
+ * Energie Pro: a cable laid by hand. Its id names the cable ("solar:<field>", "inv:<inverter>", "bat:<battery>",
+ * "grid"); the points are its way in the plan, run at `height` above the given floor.
+ */
+export interface CableRoute {
+  id: string;
+  floor_id: string;
+  points: Vec2[];
+  height: number;
+}
 
 export interface RoofWindow {
   id: string;

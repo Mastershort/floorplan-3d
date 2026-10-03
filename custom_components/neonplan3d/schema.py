@@ -123,6 +123,8 @@ FURNITURE_SCHEMA = vol.Schema(
         vol.Required("d"): _LENGTH,
         vol.Required("h"): _LENGTH,
         vol.Required("variant"): vol.Any(None, vol.All(str, vol.Length(max=32))),
+        # its own name (e.g. "Wechselrichter Nord"); None = the type's name
+        vol.Optional("name", default=None): vol.Any(None, vol.All(str, vol.Length(max=60))),
         # linked entities (e.g. the TV's media player, a power sensor): None = automatic, "none" = no entity
         vol.Optional("entity", default=None): vol.Any(None, vol.All(str, vol.Length(max=255))),
         vol.Optional("power", default=None): vol.Any(None, vol.All(str, vol.Length(max=255))),
@@ -293,6 +295,17 @@ ROOF_WINDOW_SCHEMA = vol.Schema(
     extra=vol.ALLOW_EXTRA,
 )
 
+# Energie Pro: a cable laid by hand: its way in the plan at a height above its floor
+CABLE_SCHEMA = vol.Schema(
+    {
+        vol.Required("id"): vol.All(str, vol.Length(max=80)),
+        vol.Required("floor_id"): _ID,
+        vol.Required("points"): vol.All([_POINT], vol.Length(min=1, max=60)),
+        vol.Optional("height", default=0.03): vol.All(vol.Coerce(float), vol.Range(min=0, max=30)),
+    },
+    extra=vol.ALLOW_EXTRA,
+)
+
 # Energie Pro: the hologram hangs on a solar field, moved along it and scaled
 HOLOGRAM_SCHEMA = vol.Schema(
     {
@@ -314,6 +327,7 @@ ROOF_SCHEMA = vol.Schema(
         vol.Optional("strings", default=list): vol.All([SOLAR_STRING_SCHEMA], vol.Length(max=16)),
         vol.Optional("windows", default=list): vol.All([ROOF_WINDOW_SCHEMA], vol.Length(max=32)),
         vol.Optional("hologram", default=None): vol.Any(None, HOLOGRAM_SCHEMA),
+        vol.Optional("cables", default=list): vol.All([CABLE_SCHEMA], vol.Length(max=64)),
         vol.Optional("pitch", default=35): vol.All(vol.Coerce(float), vol.Range(min=5, max=60)),
         vol.Optional("overhang", default=0.4): vol.All(vol.Coerce(float), vol.Range(min=0, max=2)),
         # gable roof: ridge along the long side (None) or along the short side (terraced houses)

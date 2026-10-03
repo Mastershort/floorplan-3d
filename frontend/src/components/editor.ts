@@ -11,7 +11,7 @@ import { holeInRoom } from "../geometry/holes.ts";
 import { weatherEntity } from "../weather.ts";
 import { SHOW_PRESENCE } from "../flags.ts";
 import { hasFeature, manualUrl, shopUrl } from "../features.ts";
-import { deviceSensors, gridPoint, proposeEnergySensors, type EnergyPrefs } from "../energy.ts";
+import { deviceSensors, flowSegments, gridPoint, proposeEnergySensors, type EnergyPrefs, type FlowSegment } from "../energy.ts";
 import { isStatusSensor, robotRoomSensor, TOGGLE_KINDS } from "../devices.ts";
 import { ridgeHeight, roofSectionsFromRooms, sectionFrame, sectionProfile, wallTopUnder } from "../roof-sections.ts";
 import { bestFace, clampField, faceAt, faceCompass, fieldFace, fieldModules, GROUND, pointOnFace, proposeField, proposeGroundField, proposeWindow, proposeWallField, roofFaces, rowCounts, turnGroundField, fieldCenter, wallFaces, windowAsField, windowCorners, onFace, onField, rayOnFace, type RoofFace } from "../solar.ts";
@@ -113,6 +113,7 @@ type Drag =
   | { kind: "solarmove"; id: string; start: Vec2; startScreen: [number, number]; base: Building; moved: boolean; grab: { du: number; ds: number } | null; win?: boolean }
   | { kind: "outvertex"; id: string; index: number; base: Building; moved: boolean }
   | { kind: "roofcorner"; id: string; corner: [0 | 1, 0 | 1]; base: Building; moved: boolean }
+  | { kind: "cablept"; id: string; index: number; base: Building; moved: boolean }
   | { kind: "freewall"; start: Vec2; end: Vec2 }
   | { kind: "wallmove"; id: string; end: "a" | "b" | null; start: Vec2; startScreen: [number, number]; base: Building; moved: boolean }
   | { kind: "outdoor"; id: string; start: Vec2; startScreen: [number, number]; base: Building; moved: boolean }
@@ -125,7 +126,7 @@ interface Guides {
 }
 
 /** Drags that change the document live (restored when cancelled, recorded in the history when done). */
-const EDIT_DRAGS = new Set(["vertex", "room", "device", "opening", "furniture", "rotate", "resize", "outdoor", "roofmove", "roofcorner", "outvertex", "solarmove", "solarturn"]);
+const EDIT_DRAGS = new Set(["vertex", "room", "device", "opening", "furniture", "rotate", "resize", "outdoor", "roofmove", "roofcorner", "outvertex", "solarmove", "solarturn", "cablept"]);
 
 const HISTORY = 100;
 const SNAP_PX = 10;
@@ -162,6 +163,7 @@ export class Fp3dEditor extends LitElement {
     _solarPick: { state: true },
     _roofWinId: { state: true },
     _energyNote: { state: true },
+    _cableId: { state: true },
     _furnQuery: { state: true },
     _libOpen: { state: true },
     _expanded: { state: true },
@@ -230,6 +232,10 @@ export class Fp3dEditor extends LitElement {
   private declare _roofWinId: string | null;
   /** What the import from the energy dashboard did (shown under its button). */
   private declare _energyNote: string | null;
+  /** The cable picked in the energy tool (its key), shown with its points in the plan. */
+  private declare _cableId: string | null;
+  /** The cables' ways for the plan, computed once per document. */
+  private cableCache: { doc: Building; segs: FlowSegment[] } | null = null;
   /** Furniture library: the search text, and which sections are open (built-in groups and packs). */
   private declare _furnQuery: string;
   private declare _libOpen: Set<string>;
@@ -300,6 +306,7 @@ export class Fp3dEditor extends LitElement {
     this._solarPick = false;
     this._roofWinId = null;
     this._energyNote = null;
+    this._cableId = null;
     this._furnQuery = "";
     this._libOpen = new Set(["group:lights", "group:living"]);
     try {
@@ -960,6 +967,43 @@ export class Fp3dEditor extends LitElement {
         this.drag = this.isAdmin ? { kind: "furniture", id: marker, start: world, startScreen: local, base: this._doc, moved: false } : { kind: "pan", last: local };
         return;
       }
+      if (this._tool === "energy") {
+        const pt = target.closest("[data-cable-pt]")?.getAttribute("data-cable-pt");
+        if (pt && this.isAdmin) {
+          const i = pt.lastIndexOf(":");
+          const id = pt.slice(0, i);
+          const index = Number(pt.slice(i + 1));
+          // a double click takes the point out (two points stay at least)
+          if (e.detail >= 2) {
+            this.change((d) => {
+              const c = d.settings.roof.cables?.find((x) => x.id === id);
+              if (c && c.points.length > 1) c.points.splice(index, 1);
+            });
+            this.drag = { kind: "pan", last: local };
+            return;
+          }
+          this.drag = { kind: "cablept", id, index, base: this._doc, moved: false };
+          return;
+        }
+        const line = target.closest("[data-cable-line]")?.getAttribute("data-cable-line");
+        if (line && this.isAdmin) {
+          // a click on the laid cable puts a new point there and takes it along
+          const index = Number(target.closest("[data-cable-line]")?.getAttribute("data-cable-seg") ?? 0) + 1;
+          const base = this._doc;
+          this.change((d) => {
+            const c = d.settings.roof.cables?.find((x) => x.id === line);
+            if (c) c.points.splice(index, 0, [round(world[0]), round(world[1])]);
+          });
+          this.drag = { kind: "cablept", id: line, index, base, moved: true };
+          return;
+        }
+        const cable = target.closest("[data-cable]")?.getAttribute("data-cable");
+        if (cable) {
+          this._cableId = cable;
+          this.drag = { kind: "pan", last: local };
+          return;
+        }
+      }
       const solar = this._tool === "energy" ? target.closest("[data-solar]")?.getAttribute("data-solar") : null;
       const turn = this._tool === "energy" ? target.closest("[data-solar-turn]")?.getAttribute("data-solar-turn") : null;
       if (turn && this.isAdmin) {
@@ -1371,6 +1415,19 @@ export class Fp3dEditor extends LitElement {
         );
         break;
       }
+      case "cablept": {
+        drag.moved = true;
+        const p = this.snap(world, undefined, e.altKey);
+        this.change(
+          (doc) => {
+            const c = doc.settings.roof.cables?.find((x) => x.id === drag.id);
+            if (c && c.points[drag.index]) c.points[drag.index] = [round(p[0]), round(p[1])];
+          },
+          drag.base,
+          false,
+        );
+        break;
+      }
       case "roofcorner": {
         drag.moved = true;
         const p = this.snap(world, undefined, e.altKey);
@@ -1531,6 +1588,7 @@ export class Fp3dEditor extends LitElement {
       case "solarturn":
       case "roofmove":
       case "roofcorner":
+      case "cablept":
         if (drag.moved) this.pushHistory(drag.base);
         break;
       case "device":
@@ -2330,6 +2388,133 @@ export class Fp3dEditor extends LitElement {
   }
 
   /** Energy tool: a round marker with a symbol and its name on every energy device of the floor, above all else. */
+  /** The cables' ways (with a still picture of the flows: all sensors at zero), once per document. */
+  private cableSegments(): FlowSegment[] {
+    if (this.cableCache?.doc === this._doc) return this.cableCache.segs;
+    const b = this._doc;
+    const fieldPower = new Map((b.settings.roof.solar ?? []).map((f) => [f.id, 0]));
+    const summary = { grid: 0, solar: 0, battery: 0, soc: null, tariff: null, consumption: 0 };
+    let segs: FlowSegment[] = [];
+    try {
+      segs = flowSegments({ building: b, consumers: [], summary, fieldPower }).filter((x) => x.key);
+    } catch {
+      segs = [];
+    }
+    this.cableCache = { doc: b, segs };
+    return segs;
+  }
+
+  /** The cables by key, in order: solar fields, inverters, batteries, the grid. */
+  private cableKeys(): string[] {
+    const keys = [...new Set(this.cableSegments().map((x) => x.key!))];
+    const rank = (k: string) => (k.startsWith("solar:") ? 0 : k.startsWith("inv:") ? 1 : k.startsWith("bat:") ? 2 : 3);
+    return keys.sort((p, q) => rank(p) - rank(q) || p.localeCompare(q));
+  }
+
+  /** What a cable key means to the user: "Solarfeld 1 → Wechselrichter Nord". */
+  private cableLabel(key: string): string {
+    const furn = (id: string) => {
+      const m = this._doc.floors.flatMap((f) => f.furniture).find((x) => x.id === id);
+      return m ? m.name || this.t(`furn_${m.type}` as I18nKey) : "?";
+    };
+    const meter = this._doc.floors.flatMap((f) => f.furniture).find((x) => x.type === "meter");
+    const meterName = meter ? meter.name || this.t("furn_meter") : this.t("energy_meter");
+    if (key === "grid") return `${meterName} → ${this.t("furn_grid_point")}`;
+    const [kind, id] = [key.slice(0, key.indexOf(":")), key.slice(key.indexOf(":") + 1)];
+    if (kind === "solar") {
+      const fields = this._doc.settings.roof.solar ?? [];
+      const i = fields.findIndex((f) => f.id === id);
+      const f = fields[i];
+      return `${f?.name || `${this.t("solar_field")} ${i + 1}`} → ${this.t("furn_inverter")}`;
+    }
+    if (kind === "inv") return `${furn(id)} → ${meterName}`;
+    return `${this.t("furn_inverter")} ↔ ${furn(id)}`;
+  }
+
+  /** Lay a cable by hand: its automatic way (on the plan) becomes points to drag. */
+  private layCable(key: string): void {
+    if (!this.isAdmin || !this._floorId) return;
+    const pts: Vec2[] = [];
+    for (const seg of this.cableSegments().filter((x) => x.key === key)) {
+      for (const q of [seg.a, seg.b]) {
+        const p: Vec2 = [round(q[0]), round(q[2])];
+        const last = pts[pts.length - 1];
+        if (!last || Math.hypot(last[0] - p[0], last[1] - p[1]) > 0.05) pts.push(p);
+      }
+    }
+    // the ends are the devices themselves: only the way between them is laid
+    const inner = pts.length > 2 ? pts.slice(1, -1) : pts;
+    const floorId = this._floorId;
+    this.change((d) => {
+      d.settings.roof.cables = [...(d.settings.roof.cables ?? []).filter((c) => c.id !== key), { id: key, floor_id: floorId, points: inner.length ? inner : [pts[0] ?? [0, 0]], height: 0.03 }];
+    });
+    this._cableId = key;
+  }
+
+  /** The cables in the plan: faint for the automatic ways, solid for laid ones, with points on the picked cable. */
+  private renderCables() {
+    const segs = this.cableSegments().filter((x) => x.floorId === this._floorId);
+    if (!segs.length) return nothing;
+    const cables = this._doc.settings.roof.cables ?? [];
+    const keys = [...new Set(segs.map((x) => x.key!))];
+    const sel = this._cableId;
+    return svg`<g class="fp3d-cable-layer">${keys.map((key) => {
+      const laid = cables.find((c) => c.id === key);
+      const cls = `fp3d-cable fp3d-cable-${key.split(":")[0]}${laid ? " fp3d-cable-laid" : ""}${key === sel ? " fp3d-cable-sel" : ""}`;
+      const lines = segs
+        .filter((x) => x.key === key)
+        .map((x) => {
+          const a = this.toScreen([x.a[0], x.a[2]]);
+          const b = this.toScreen([x.b[0], x.b[2]]);
+          return svg`<line x1=${a[0]} y1=${a[1]} x2=${b[0]} y2=${b[1]} />`;
+        });
+      if (!(laid && key === sel && laid.floor_id === this._floorId)) return svg`<g class=${cls} data-cable=${key}><g class="fp3d-cable-hit">${lines}</g>${lines}</g>`;
+      // the picked laid cable: its points to drag, its pieces take new points
+      const pts = laid.points.map((p) => this.toScreen(p));
+      const pieces = pts.slice(0, -1).map((p, i) => svg`<line class="fp3d-cable-piece" data-cable-line=${key} data-cable-seg=${i} x1=${p[0]} y1=${p[1]} x2=${pts[i + 1][0]} y2=${pts[i + 1][1]} />`);
+      const handles = pts.map((p, i) => svg`<g class="fp3d-vertex" data-cable-pt=${`${key}:${i}`}><circle cx=${p[0]} cy=${p[1]} r="16" class="fp3d-hit" /><circle cx=${p[0]} cy=${p[1]} r="6" /></g>`);
+      return svg`<g class=${cls} data-cable=${key}>${lines}${pieces}${handles}</g>`;
+    })}</g>`;
+  }
+
+  /** Energie Pro: the cables, each to lay by hand with points and a height. */
+  private renderCableSettings() {
+    const keys = this.cableKeys();
+    if (!keys.length) return nothing;
+    const admin = this.isAdmin;
+    const cables = this._doc.settings.roof.cables ?? [];
+    const sel = this._cableId ? cables.find((c) => c.id === this._cableId) : undefined;
+    return html`<section>
+      <h3>〰 ${this.t("cables_title")}</h3>
+      <p class="fp3d-sub">${this.t("cables_hint")}</p>
+      <div class="fp3d-room-list">
+        ${keys.map(
+          (key) => html`<div class="fp3d-row">
+            <button class="fp3d-dev-name ${key === this._cableId ? "fp3d-sel" : ""}" @click=${() => (this._cableId = key === this._cableId ? null : key)}>
+              <span>${this.cableLabel(key)}${cables.some((c) => c.id === key) ? html` <em class="fp3d-sub">· ${this.t("cable_laid")}</em>` : nothing}</span>
+            </button>
+          </div>`,
+        )}
+      </div>
+      ${this._cableId
+        ? html`<div class="fp3d-actions">
+              ${sel
+                ? html`<button class="fp3d-btn" ?disabled=${!admin} @click=${() => this.change((d) => (d.settings.roof.cables = (d.settings.roof.cables ?? []).filter((c) => c.id !== this._cableId)))}>${this.t("cable_auto")}</button>`
+                : html`<button class="fp3d-btn fp3d-primary" ?disabled=${!admin || !this._floorId} @click=${() => this.layCable(this._cableId!)}>${this.t("cable_lay")}</button>`}
+            </div>
+            ${sel
+              ? html`<div class="fp3d-form">
+                    ${this.num(this.t("cable_height"), sel.height, (v) => this.change((d) => {
+                      const c = d.settings.roof.cables?.find((x) => x.id === sel.id);
+                      if (c) c.height = Math.min(30, Math.max(0, round(v)));
+                    }), 0.05, 0)}
+                  </div>
+                  <p class="fp3d-sub">${sel.floor_id === this._floorId ? this.t("cable_points_hint") : this.t("cable_other_floor", { floor: this._doc.floors.find((f) => f.id === sel.floor_id)?.name ?? "" })}</p>`
+              : nothing}`
+        : nothing}
+    </section>`;
+  }
+
   private renderEnergyMarkers() {
     const floor = this.floor;
     if (!floor) return nothing;
@@ -2724,7 +2909,7 @@ export class Fp3dEditor extends LitElement {
     if (device)
       return html`<button class="fp3d-btn fp3d-back" @click=${() => this.selectItem("furniture", null)}>‹ ${this.t("tool_energy")}</button>
         ${this.renderFurnitureForm(device)}`;
-    return html`${this.renderSolarList()}${this.renderEnergyDevices()}${this.renderEnergyBalance()}${this.renderHologramSettings()}${this.renderSolarProTeaser()}`;
+    return html`${this.renderSolarList()}${this.renderEnergyDevices()}${this.renderEnergyBalance()}${this.renderCableSettings()}${this.renderHologramSettings()}${this.renderSolarProTeaser()}`;
   }
 
   /** Energie Pro: which solar field the hologram hangs on, how big it is and where exactly. */
@@ -2848,7 +3033,7 @@ export class Fp3dEditor extends LitElement {
                     this.showPoint(m.x, m.z);
                   }}
                 >
-                  <span>${this.t(`furn_${m.type}` as I18nKey)} · ${fl.name}</span>
+                  <span>${m.name || this.t(`furn_${m.type}` as I18nKey)} · ${fl.name}</span>
                 </button>
               </div>`,
             )}
@@ -3492,7 +3677,7 @@ export class Fp3dEditor extends LitElement {
               ${floor && this._tool === "select" ? this.renderDevices(floor) : nothing}
               ${this.room && this.isAdmin && this._tool === "select" && !this._openingId && !this._furnitureId && !this.isFixedItem("room", this.room.id) ? this.renderHandles(this.room) : nothing}
               ${floor ? this.renderOutdoorHandles(floor) : nothing}
-              ${this._tool === "roof" ? svg`${this.renderRoofSections()}${this.renderRoofWindows()}` : this._tool === "energy" ? svg`${this.renderRoofSections()}${this.renderSolarFields()}${this.renderEnergyMarkers()}` : nothing} ${this.renderDraft()} ${this.renderGuides()}
+              ${this._tool === "roof" ? svg`${this.renderRoofSections()}${this.renderRoofWindows()}` : this._tool === "energy" ? svg`${this.renderRoofSections()}${this.renderSolarFields()}${this.renderCables()}${this.renderEnergyMarkers()}` : nothing} ${this.renderDraft()} ${this.renderGuides()}
             </svg>
             ${this.renderContext()}
             <p class="fp3d-hint ${this._fixedHint ? "fp3d-hint-fixed" : ""}">${!floor ? this.t("hint_empty") : this._fixedHint ? this.t("fixed_drag_hint") : this.t(`hint_${this._tool}` as I18nKey)}</p>
@@ -4543,8 +4728,12 @@ export class Fp3dEditor extends LitElement {
   private renderFurnitureForm(f: Furniture) {
     const admin = this.isAdmin;
     return html`<section>
-      <div class="fp3d-h3row"><h3>${this.t("furniture")}</h3>${this.fixButton("furniture", f.id)}</div>
+      <div class="fp3d-h3row"><h3>${f.name || this.t("furniture")}</h3>${this.fixButton("furniture", f.id)}</div>
       <div class="fp3d-form">
+        <label class="fp3d-field fp3d-wide"
+          >${this.t("furn_name")}
+          <input type="text" maxlength="60" .value=${f.name ?? ""} ?disabled=${!admin} placeholder=${this.t(`furn_${f.type}` as I18nKey) === `furn_${f.type}` ? "" : this.t(`furn_${f.type}` as I18nKey)} @change=${(e: Event) => this.updateFurniture({ name: (e.target as HTMLInputElement).value.trim() || null })} />
+        </label>
         <label class="fp3d-field fp3d-wide"
           >${this.t("furniture_type")}
           <select ?disabled=${!admin} @change=${(e: Event) => this.updateFurniture({ type: (e.target as HTMLSelectElement).value })}>
@@ -6299,6 +6488,44 @@ export class Fp3dEditor extends LitElement {
         opacity: 0.45;
       }
       .fp3d-tool-energy .fp3d-energy-item {
+        pointer-events: auto;
+      }
+      /* the cables in the energy tool: faint automatic ways, solid laid ones */
+      .fp3d-cable line {
+        stroke: #ffd75a;
+        stroke-width: 2;
+        stroke-dasharray: 5 4;
+        opacity: 0.8;
+        pointer-events: none;
+      }
+      .fp3d-cable-bat line {
+        stroke: #5dffb0;
+      }
+      .fp3d-cable-grid line {
+        stroke: #4ff6ff;
+      }
+      .fp3d-cable-hit line {
+        stroke-width: 12;
+        opacity: 0;
+        pointer-events: stroke;
+        cursor: pointer;
+      }
+      .fp3d-cable-laid line {
+        stroke-dasharray: none;
+        opacity: 0.9;
+      }
+      .fp3d-cable-sel line {
+        stroke-width: 2.5;
+        opacity: 1;
+        filter: drop-shadow(0 0 4px currentColor);
+      }
+      .fp3d-cable-sel .fp3d-cable-piece {
+        stroke-width: 14;
+        opacity: 0;
+        pointer-events: stroke;
+        cursor: copy;
+      }
+      .fp3d-cable .fp3d-vertex circle {
         pointer-events: auto;
       }
       .fp3d-energy-marker {

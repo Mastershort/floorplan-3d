@@ -140,6 +140,7 @@ const shots = [
   // Energie Pro: the cables from the roof to the inverter, battery, meter, wallbox and grid with their moving dots
   { name: "view-flows", query: "?flows", width: 1280, height: 800, editor: true, editorScript: "e.fit();", then3d: "Alle Etagen", then3dAlso: ["Gestapelt"], camera: { theta: 0.6, phi: 1.15, radius: 22 } },
   { name: "view-flows-garage", query: "?flows", width: 1280, height: 800, editor: true, editorScript: "e.fit();", then3d: "Alle Etagen", then3dAlso: ["Gestapelt"], camera: { theta: 3.6, phi: 1.2, radius: 16 } },
+  { name: "editor-cables", query: "?flows", width: 1500, height: 1000, editor: true, editorScript: "e._tool = 'energy'; e._floorId = 'eg'; e._solarId = null; setTimeout(() => { e.layCable('inv:' + e._doc.floors[0].furniture.find((m) => m.type === 'inverter').id); e.fit(); }, 400);", afterWait: 1800, scrollSide: true },
   { name: "view-solar-live", query: "?flows&pv=5400", width: 1280, height: 800, editor: true, editorScript: "e.fit();", then3d: "Alle Etagen", then3dAlso: ["Gestapelt"], camera: { theta: 1.1, phi: 0.9, radius: 26 } },
   { name: "view-flows-eg", query: "?flows", width: 1280, height: 800, editor: true, editorScript: "e.fit();", then3d: "Erdgeschoss", camera: { theta: 0.25, phi: 1.2, radius: 11 } },
   { name: "view-flows-room", query: "?flows", width: 1280, height: 800, click: "Erdgeschoss", then: "Garage" },
@@ -316,6 +317,18 @@ for (const shot of shots.filter((s) => !only || only.includes(s.name))) {
       new Function("e", code)(e);
     }, shot.editorScript);
     await new Promise((r) => setTimeout(r, 1200 + (shot.afterWait ?? 0)));
+    // DEBUG_EVAL="<code using e>" prints what the editor says (for looking into a scene)
+    if (process.env.DEBUG_EVAL) {
+      const out = await page.evaluate((code) => {
+        const e = document.querySelector("neonplan3d-panel").shadowRoot.querySelector("fp3d-editor");
+        try {
+          return String(new Function("e", "return " + code)(e));
+        } catch (err) {
+          return "ERROR " + err.message;
+        }
+      }, process.env.DEBUG_EVAL);
+      console.log("DEBUG", out);
+    }
     if (shot.then3d) {
       await clickText("3D");
       await clickText(shot.then3d);

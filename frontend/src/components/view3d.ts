@@ -916,7 +916,7 @@ export class Fp3dView3d extends LitElement {
           z: f.z,
           y: markerHeight(f) + mountBase(floor, f),
           icon: iconSvg(kind ?? "switch"),
-          name: link.entity ? entityName(hass, link.entity) : furnitureName(hass, f.type),
+          name: f.name || (link.entity ? entityName(hass, link.entity) : furnitureName(hass, f.type)),
           text:
             f.type === "home_battery"
               ? this.batteryText(hass, extra, power)
@@ -1159,7 +1159,7 @@ export class Fp3dView3d extends LitElement {
       z: f.z,
       y,
       icon: iconSvg("light"),
-      name: entity ? entityName(hass, entity) : furnitureName(hass, f.type),
+      name: f.name || (entity ? entityName(hass, entity) : furnitureName(hass, f.type)),
       text: st ? stateText(hass, st) : "",
       active: st ? isActive(st) : false,
       unavailable: st ? isUnavailable(st) : false,

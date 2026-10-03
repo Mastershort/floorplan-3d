@@ -7,7 +7,7 @@
 // consumers behind a cable is added up, so trunk lines carry more than branches.
 
 import { generateWalls } from "./geometry/walls.ts";
-import type { Building, EnergySettings, Floor, Furniture, Room, SolarField, Vec2 } from "./model.ts";
+import type { Building, CableRoute, EnergySettings, Floor, Furniture, Room, SolarField, Vec2 } from "./model.ts";
 import { fieldCenter, fieldFace, fieldSize, roofFaces, topFloor, wallFaces } from "./solar.ts";
 import { powerSensorsOf } from "./devices.ts";
 import { pointInPolygon, signedArea } from "./model.ts";
@@ -25,6 +25,8 @@ export interface FlowSegment {
   /** Power carried (W, >= 0); the flow runs from a to b. */
   power: number;
   kind: FlowKind;
+  /** Pro: which cable this piece belongs to ("solar:<field>", "inv:<inverter>", "bat:<battery>", "grid"); none: the house tree. */
+  key?: string;
 }
 
 export interface EnergySummary {
@@ -512,10 +514,19 @@ export function flowSegments({ building, consumers, summary, battery, fieldPower
 
   // grid feed: from the street through the nearest exterior wall to the meter
   const street = summary.grid !== null ? gridPoint(building) : null;
+  const cables = building.settings.roof.cables ?? [];
+  const laid = (key: string) => cables.find((c) => c.id === key);
+  const tag = (segs: FlowSegment[], key: string) => segs.map((seg) => ({ ...seg, key }));
   if (street) {
     const importing = summary.grid! >= 0;
-    const route: V3[] = [[street.end[0], CABLE_Y, street.end[1]], [street.wall[0], CABLE_Y, street.wall[1]], [meter.x, CABLE_Y, meter.z]];
-    out.push(...polyline(meterFloor.id, importing ? route : [...route].reverse(), Math.abs(summary.grid!), importing ? "grid" : "export", 0));
+    const hand = laid("grid");
+    const route: V3[] = hand
+      ? manualPoints(building, hand, [street.end[0], meterFloor.elevation + CABLE_Y, street.end[1]], [meter.x, meterFloor.elevation + 0.4 + 1.1, meter.z])
+      : [[street.end[0], CABLE_Y, street.end[1]], [street.wall[0], CABLE_Y, street.wall[1]], [meter.x, CABLE_Y, meter.z]];
+    const pieces = hand
+      ? absolutePolyline(building, importing ? route : [...route].reverse(), Math.abs(summary.grid!), importing ? "grid" : "export", meterFloor)
+      : polyline(meterFloor.id, importing ? route : [...route].reverse(), Math.abs(summary.grid!), importing ? "grid" : "export", 0);
+    out.push(...tag(pieces, "grid"));
   }
   // the battery cable (on the meter) flows towards the meter when discharging
   if (summary.battery !== null && summary.battery > 0) {
@@ -539,7 +550,13 @@ export function flowSegments({ building, consumers, summary, battery, fieldPower
       }
       if (inv) fieldsOf.set(inv.id, (fieldsOf.get(inv.id) ?? 0) + power);
       const target = inv ?? { floorId: meter.floor_id, x: meter.x, z: meter.z };
-      out.push(...solarRoute(building, f, power, target, inv ? 1.1 + inv.h : 1.5));
+      const targetY = inv ? 1.1 + inv.h : 1.5;
+      const hand = laid(`solar:${f.id}`);
+      const start = hand ? fieldStart(building, f) : null;
+      const floor = building.floors.find((x) => x.id === target.floorId);
+      if (hand && start && floor) {
+        out.push(...tag(absolutePolyline(building, manualPoints(building, hand, start, [target.x, floor.elevation + targetY, target.z]), power, "solar", floor), `solar:${f.id}`));
+      } else out.push(...tag(solarRoute(building, f, power, target, targetY), `solar:${f.id}`));
     }
   } else if (summary.solar !== null && !inverters.length) {
     // older plans without fields or an inverter: the sun comes down from above the ceiling to the meter
@@ -555,15 +572,26 @@ export function flowSegments({ building, consumers, summary, battery, fieldPower
       feed = fieldsOf.get(inv.id) ?? (inverters.length === 1 ? (summary.solar ?? 0) : 0);
       for (const bat of mine) feed += batteryPower(bat);
     }
+    const invFloor = building.floors.find((x) => x.id === inv.floorId);
     if (summary.solar !== null || summary.battery !== null) {
-      out.push(...deviceRoute(building, inv, invTop, { floorId: meter.floor_id, x: meter.x, z: meter.z }, 1.5, Math.max(0, feed), "inverter", 0));
+      const hand = laid(`inv:${inv.id}`);
+      const pieces =
+        hand && invFloor
+          ? absolutePolyline(building, manualPoints(building, hand, [inv.x, invFloor.elevation + invTop, inv.z], [meter.x, meterFloor.elevation + 1.5, meter.z]), Math.max(0, feed), "inverter", invFloor)
+          : deviceRoute(building, inv, invTop, { floorId: meter.floor_id, x: meter.x, z: meter.z }, 1.5, Math.max(0, feed), "inverter", 0);
+      out.push(...tag(pieces, `inv:${inv.id}`));
     }
     for (const bat of mine) {
       const p = batteryPower(bat);
       if (summary.battery === null && own(bat.id) === undefined) continue;
-      const route = deviceRoute(building, inv, invTop - 0.1, bat, bat.variant === "wall" ? 0.5 + bat.h : 0.9, Math.abs(p), "battery", 0);
+      const batY = bat.variant === "wall" ? 0.5 + bat.h : 0.9;
+      const hand = laid(`bat:${bat.id}`);
+      const route =
+        hand && invFloor
+          ? absolutePolyline(building, manualPoints(building, hand, [inv.x, invFloor.elevation + invTop - 0.1, inv.z], [bat.x, invFloor.elevation + batY, bat.z]), Math.abs(p), "battery", invFloor)
+          : deviceRoute(building, inv, invTop - 0.1, bat, batY, Math.abs(p), "battery", 0);
       // charging: from the inverter to the battery; discharging: the other way round
-      out.push(...(p <= 0 ? route : route.map((s) => ({ ...s, a: s.b, b: s.a })).reverse()));
+      out.push(...tag(p <= 0 ? route : route.map((s) => ({ ...s, a: s.b, b: s.a })).reverse(), `bat:${bat.id}`));
     }
   }
   return out;
@@ -708,6 +736,23 @@ function polyline(floorId: string, pts: V3[], power: number, kind: FlowKind, dis
     dist += len;
   }
   return out;
+}
+
+/** A cable laid by hand: from its start to its first point, along its points at its height, and on to its end. */
+function manualPoints(building: Building, route: CableRoute, from: V3, to: V3): V3[] {
+  const floor = building.floors.find((f) => f.id === route.floor_id);
+  const y = (floor?.elevation ?? 0) + Math.max(CABLE_Y, route.height);
+  return [from, ...route.points.map((p): V3 => [p[0], y, p[1]]), to];
+}
+
+/** Where a field's cable starts (building coordinates): under its lower edge, or under a garden field's middle. */
+export function fieldStart(building: Building, f: SolarField): V3 | null {
+  const face = fieldFace(building, f, [...roofFaces(building), ...wallFaces(building)]);
+  if (!face) return null;
+  const [w, d] = fieldSize(face, f);
+  const u = f.u + w / 2;
+  const sv = face.unbounded ? f.v + d / 2 : f.v;
+  return [face.o[0] + face.eu[0] * u + face.es[0] * sv, face.o[1] + face.eu[1] * u + face.es[1] * sv, face.o[2] + face.eu[2] * u + face.es[2] * sv];
 }
 
 /** The point of a floor's cable rings (just inside the walls) nearest to a plan point. */
