@@ -987,8 +987,8 @@ export class Fp3dEditor extends LitElement {
         }
         const line = target.closest("[data-cable-line]")?.getAttribute("data-cable-line");
         if (line && this.isAdmin) {
-          // a click on the laid cable puts a new point there and takes it along
-          const index = Number(target.closest("[data-cable-line]")?.getAttribute("data-cable-seg") ?? 0) + 1;
+          // a click on the laid cable puts a new point there and takes it along (piece i lies before point i)
+          const index = Number(target.closest("[data-cable-line]")?.getAttribute("data-cable-seg") ?? 0);
           const base = this._doc;
           this.change((d) => {
             const c = d.settings.roof.cables?.find((x) => x.id === line);
@@ -2453,14 +2453,16 @@ export class Fp3dEditor extends LitElement {
 
   /** The cables in the plan: faint for the automatic ways, solid for laid ones, with points on the picked cable. */
   private renderCables() {
-    const segs = this.cableSegments().filter((x) => x.floorId === this._floorId);
-    if (!segs.length) return nothing;
+    const all = this.cableSegments();
+    if (!all.length) return nothing;
+    const segs = all.filter((x) => x.floorId === this._floorId);
     const cables = this._doc.settings.roof.cables ?? [];
-    const keys = [...new Set(segs.map((x) => x.key!))];
     const sel = this._cableId;
+    const keys = [...new Set(all.map((x) => x.key!))];
     return svg`<g class="fp3d-cable-layer">${keys.map((key) => {
       const laid = cables.find((c) => c.id === key);
       const cls = `fp3d-cable fp3d-cable-${key.split(":")[0]}${laid ? " fp3d-cable-laid" : ""}${key === sel ? " fp3d-cable-sel" : ""}`;
+      const mine = all.filter((x) => x.key === key);
       const lines = segs
         .filter((x) => x.key === key)
         .map((x) => {
@@ -2468,11 +2470,16 @@ export class Fp3dEditor extends LitElement {
           const b = this.toScreen([x.b[0], x.b[2]]);
           return svg`<line x1=${a[0]} y1=${a[1]} x2=${b[0]} y2=${b[1]} />`;
         });
-      if (!(laid && key === sel && laid.floor_id === this._floorId)) return svg`<g class=${cls} data-cable=${key}><g class="fp3d-cable-hit">${lines}</g>${lines}</g>`;
-      // the picked laid cable: its points to drag, its pieces take new points
-      const pts = laid.points.map((p) => this.toScreen(p));
-      const pieces = pts.slice(0, -1).map((p, i) => svg`<line class="fp3d-cable-piece" data-cable-line=${key} data-cable-seg=${i} x1=${p[0]} y1=${p[1]} x2=${pts[i + 1][0]} y2=${pts[i + 1][1]} />`);
-      const handles = pts.map((p, i) => svg`<g class="fp3d-vertex" data-cable-pt=${`${key}:${i}`}><circle cx=${p[0]} cy=${p[1]} r="16" class="fp3d-hit" /><circle cx=${p[0]} cy=${p[1]} r="6" /></g>`);
+      if (!(laid && key === sel && laid.floor_id === this._floorId)) return lines.length ? svg`<g class=${cls} data-cable=${key}><g class="fp3d-cable-hit">${lines}</g>${lines}</g>` : nothing;
+      // the picked laid cable: its points to drag; every piece from device to device takes new points
+      const first = mine[0];
+      const last = mine[mine.length - 1];
+      const chain = [this.toScreen([first.a[0], first.a[2]]), ...laid.points.map((p) => this.toScreen(p)), this.toScreen([last.b[0], last.b[2]])];
+      const pieces = chain.slice(0, -1).map((p, i) => svg`<line class="fp3d-cable-piece" data-cable-line=${key} data-cable-seg=${i} x1=${p[0]} y1=${p[1]} x2=${chain[i + 1][0]} y2=${chain[i + 1][1]} />`);
+      const handles = laid.points.map((p, i) => {
+        const q = this.toScreen(p);
+        return svg`<g class="fp3d-vertex" data-cable-pt=${`${key}:${i}`}><circle cx=${q[0]} cy=${q[1]} r="16" class="fp3d-hit" /><circle cx=${q[0]} cy=${q[1]} r="6" /></g>`;
+      });
       return svg`<g class=${cls} data-cable=${key}>${lines}${pieces}${handles}</g>`;
     })}</g>`;
   }
@@ -2490,7 +2497,15 @@ export class Fp3dEditor extends LitElement {
       <div class="fp3d-room-list">
         ${keys.map(
           (key) => html`<div class="fp3d-row">
-            <button class="fp3d-dev-name ${key === this._cableId ? "fp3d-sel" : ""}" @click=${() => (this._cableId = key === this._cableId ? null : key)}>
+            <button
+              class="fp3d-dev-name ${key === this._cableId ? "fp3d-sel" : ""}"
+              @click=${() => {
+                this._cableId = key === this._cableId ? null : key;
+                // a laid cable lives on its floor: the plan goes there so its points can be dragged
+                const laid = cables.find((c) => c.id === key);
+                if (this._cableId && laid && this._doc.floors.some((f) => f.id === laid.floor_id)) this._floorId = laid.floor_id;
+              }}
+            >
               <span>${this.cableLabel(key)}${cables.some((c) => c.id === key) ? html` <em class="fp3d-sub">· ${this.t("cable_laid")}</em>` : nothing}</span>
             </button>
           </div>`,

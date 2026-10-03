@@ -88,6 +88,7 @@ export class Fp3dView3d extends LitElement {
     _holo: { state: true },
     _holoOpen: { state: true },
     _wallboxW: { state: true },
+    _plants: { state: true },
     _flows: { state: true },
     _swipe: { state: true },
     _menu: { state: true },
@@ -162,6 +163,8 @@ export class Fp3dView3d extends LitElement {
   private declare _holoOpen: boolean;
   /** Power of the wallboxes in the plan (W), for the hologram. */
   private declare _wallboxW: number | null;
+  /** The inverters with their own sensors (name and W), for the hologram when there are several plants. */
+  private declare _plants: { name: string; w: number }[];
   private holoTimer: ReturnType<typeof setInterval> | undefined;
   private holoEl: HTMLElement | null = null;
   private holoIds = "";
@@ -270,6 +273,7 @@ export class Fp3dView3d extends LitElement {
     this._holo = null;
     this._holoOpen = true;
     this._wallboxW = null;
+    this._plants = [];
     this._swipe = null;
     this._menu = null;
     this._through = null;
@@ -602,6 +606,16 @@ export class Fp3dView3d extends LitElement {
     // a new object would make Lit render again; only changed values do
     if (JSON.stringify(energy) !== JSON.stringify(this._energy)) this._energy = energy;
     const wallboxW = consumers.some((c) => c.wallbox) ? consumers.filter((c) => c.wallbox).reduce((s, c) => s + c.power, 0) : null;
+    // several plants (a big roof plant and a balcony plant): each inverter's own power
+    const plants = b.floors
+      .flatMap((f) => f.furniture.filter((m) => m.type === "inverter"))
+      .map((m) => {
+        const sensor = this.furnitureLinks?.get(m.id)?.power;
+        const w = sensor ? readPower(hass.states[sensor]) : null;
+        return w === null ? null : { name: m.name || furnitureName(hass, m.type), w: Math.max(0, w) };
+      })
+      .filter((p): p is { name: string; w: number } => !!p);
+    if (JSON.stringify(plants) !== JSON.stringify(this._plants)) this._plants = plants;
     if (wallboxW !== this._wallboxW) this._wallboxW = wallboxW;
     // the hologram's day curve: the solar sensors' statistics, fetched now and then while the sun is watched
     const solarIds = pro && summary.solar !== null ? (b.energy.solar ? [b.energy.solar] : deviceSensors(b, (f) => this.furnitureLinks?.get(f.id)?.power ?? null).solar) : [];
@@ -718,7 +732,10 @@ export class Fp3dView3d extends LitElement {
         <div class="fp3d-holo-head"><span>☀ ${t("holo_title")}</span><span class="fp3d-holo-live">● ${t("holo_live")}</span></div>
         <div class="fp3d-holo-big"><b>${formatPower(hass, e.solar)}</b><span>${t("holo_pv_now")}</span></div>
         ${open
-          ? html`${day
+          ? html`${this._plants.length > 1
+                ? html`<div class="fp3d-holo-plants">${this._plants.map((p) => html`<span>${p.name}</span><b>${formatPower(hass, p.w)}</b>`)}</div>`
+                : nothing}
+              ${day
                 ? html`<div class="fp3d-holo-sub">${t("holo_today")} <b>${formatNumber(hass, day.kwh, 1)} kWh</b> · ${t("holo_peak")} <b>${formatPower(hass, day.peak)}</b></div>`
                 : nothing}
               ${curve
@@ -2281,6 +2298,20 @@ export class Fp3dView3d extends LitElement {
       }
       .fp3d-holo-sub {
         margin-bottom: 6px;
+      }
+      .fp3d-holo-plants {
+        display: grid;
+        grid-template-columns: auto auto;
+        justify-content: space-between;
+        column-gap: 10px;
+        margin: 0 0 5px;
+        font-size: 11px;
+        color: #aee9ff;
+      }
+      .fp3d-holo-plants b {
+        color: #ffe27a;
+        text-align: right;
+        font-variant-numeric: tabular-nums;
       }
       .fp3d-holo-sub b,
       .fp3d-holo-cell b,
