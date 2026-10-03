@@ -140,6 +140,10 @@ const shots = [
   // Energie Pro: the cables from the roof to the inverter, battery, meter, wallbox and grid with their moving dots
   { name: "view-flows", query: "?flows", width: 1280, height: 800, editor: true, editorScript: "e.fit();", then3d: "Alle Etagen", then3dAlso: ["Gestapelt"], camera: { theta: 0.6, phi: 1.15, radius: 22 } },
   { name: "view-flows-garage", query: "?flows", width: 1280, height: 800, editor: true, editorScript: "e.fit();", then3d: "Alle Etagen", then3dAlso: ["Gestapelt"], camera: { theta: 3.6, phi: 1.2, radius: 16 } },
+  { name: "view-house-fr", query: "?lang=fr", width: 1280, height: 800, click: "Erdgeschoss" },
+  { name: "view-house-es", query: "?lang=es", width: 1280, height: 800, click: "Erdgeschoss" },
+  { name: "view-house-nl", query: "?lang=nl", width: 1280, height: 800, click: "Erdgeschoss" },
+  { name: "view-house-it", query: "?lang=it", width: 1280, height: 800, click: "Erdgeschoss" },
   { name: "view-open-plan", query: "", width: 1280, height: 800, editor: true, editorScript: "const r = e._doc.floors[0].rooms.find((x) => x.id === 'kueche'); r.wall_heights = r.points.map(() => 0); e.setDoc(structuredClone(e._doc));", then3d: "Erdgeschoss" },
   { name: "view-start-view", query: "", width: 1280, height: 800, editor: true, editorScript: "e.change((d) => (d.settings.start_view = { theta: 2.4, phi: 1.0, radius: 26 }));", then3d: "Alle Etagen" },
   { name: "editor-cables", query: "?flows", width: 1500, height: 1000, editor: true, editorScript: "e._tool = 'energy'; e._floorId = 'eg'; e._solarId = null; setTimeout(() => { e.layCable('inv:' + e._doc.floors[0].furniture.find((m) => m.type === 'inverter').id); e.fit(); }, 400);", afterWait: 1800, scrollSide: true },

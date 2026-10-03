@@ -5,7 +5,7 @@ import { css, html, LitElement, nothing, type PropertyValues } from "lit";
 import { BuildingController } from "./building-controller.ts";
 import "./components/room-panel.ts";
 import "./components/view3d.ts";
-import { translate } from "./i18n.ts";
+import { languageReady, loadLanguage, translate } from "./i18n.ts";
 import { controls, tokens } from "./styles.ts";
 import type { HomeAssistant } from "./types.ts";
 import type { CardConfig, CardControl } from "./card-config.ts";
@@ -138,6 +138,8 @@ export class Floorplan3dCard extends LitElement {
   protected willUpdate(changed: PropertyValues): void {
     if (changed.has("hass") && this.hass) {
       this.data.setHass(this.hass);
+      // a language beyond German and English: its texts are fetched first, then everything renders
+      if (!languageReady(this.hass.language)) void loadLanguage(this.hass.language).then(() => this.requestUpdate());
       const night = nightActive(this._config?.night, this.hass);
       if (night !== this._night) this._night = night;
     }
@@ -160,6 +162,7 @@ export class Floorplan3dCard extends LitElement {
   }
 
   protected render() {
+    if (this.hass && !languageReady(this.hass.language)) return nothing;
     const b = this.data.building;
     const height = this._config?.height ?? 420;
     const c = this._config;

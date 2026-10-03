@@ -2,7 +2,7 @@
 
 import { build, context } from "esbuild";
 import { createHash } from "node:crypto";
-import { copyFileSync, mkdirSync, readFileSync, statSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
 
 const out = "../custom_components/neonplan3d/frontend";
 const watch = process.argv.includes("--watch");
@@ -21,14 +21,20 @@ const common = {
 
 const viewerConfig = { ...common, entryPoints: ["src/viewer/viewer3d.ts"], outfile: `${out}/neonplan3d-3d.js` };
 // the card's visual editor only loads in the dashboard's card dialog
-const cardEditorConfig = { ...common, entryPoints: ["src/card-editor.ts"], outfile: `${out}/neonplan3d-card-editor.js` };
+// the language files (lang/*.json) are fetched with a hash of their content, so a new text is never stale
+const LANGS = ["fr", "es", "nl", "it"];
+const langHash = createHash("sha256")
+  .update(LANGS.map((l) => (existsSync(`lang/${l}.json`) ? readFileSync(`lang/${l}.json`) : "")).join("\n"))
+  .digest("hex")
+  .slice(0, 12);
+const cardEditorConfig = { ...common, entryPoints: ["src/card-editor.ts"], outfile: `${out}/neonplan3d-card-editor.js`, define: { __FP3D_LANG_HASH__: JSON.stringify(langHash) } };
 // the editor is only needed by admins who open it, so it is a bundle of its own as well
 // (it draws furniture previews with the 3D bundle, so it knows that bundle's hash too)
 const editorConfig = (viewerHash) => ({
   ...common,
   entryPoints: ["src/components/editor.ts"],
   outfile: `${out}/neonplan3d-editor.js`,
-  define: { __FP3D_VIEWER_HASH__: JSON.stringify(viewerHash) },
+  define: { __FP3D_VIEWER_HASH__: JSON.stringify(viewerHash), __FP3D_LANG_HASH__: JSON.stringify(langHash) },
 });
 // The main bundle loads the 3D bundle with a hash of its content in the URL, so a new 3D bundle is
 // never taken from the browser cache (the integration version only changes after a restart).
@@ -43,6 +49,7 @@ const mainConfig = (viewerHash, editorHash, cardEditorHash) => ({
     __FP3D_EDITOR_HASH__: JSON.stringify(editorHash),
     __FP3D_CARD_EDITOR_HASH__: JSON.stringify(cardEditorHash),
     __FP3D_VERSION__: JSON.stringify(version),
+    __FP3D_LANG_HASH__: JSON.stringify(langHash),
   },
 });
 const hashOf = (file) => createHash("sha256").update(readFileSync(file)).digest("hex").slice(0, 12);
@@ -57,6 +64,9 @@ function copyFonts() {
   // pictures shown in the app (a preview of a coming Pro add-on)
   mkdirSync(`${out}/images`, { recursive: true });
   copyFileSync("assets/solar-pro.jpg", `${out}/images/solar-pro.jpg`);
+  // further languages, fetched by the bundles only when Home Assistant runs in them
+  mkdirSync(`${out}/lang`, { recursive: true });
+  for (const l of LANGS) if (existsSync(`lang/${l}.json`)) copyFileSync(`lang/${l}.json`, `${out}/lang/${l}.json`);
   for (const [pkg, file, name] of FONTS) {
     const dir = `node_modules/@fontsource-variable/${pkg}`;
     copyFileSync(`${dir}/files/${file}`, `${out}/fonts/${name}`);

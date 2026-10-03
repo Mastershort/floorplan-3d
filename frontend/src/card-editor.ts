@@ -4,7 +4,7 @@
 import { css, html, LitElement, nothing } from "lit";
 import { fetchBuilding } from "./api.ts";
 import { CARD_CONTROLS, type CardConfig, type CardControl } from "./card-config.ts";
-import { translate, type I18nKey } from "./i18n.ts";
+import { languageReady, loadLanguage, translate, type I18nKey } from "./i18n.ts";
 import type { HomeAssistant } from "./types.ts";
 
 /** Defaults of the card: options at their default are left out of the config. */
@@ -59,6 +59,8 @@ export class Floorplan3dCardEditor extends LitElement {
   }
 
   protected willUpdate(): void {
+    // a language beyond German and English: its texts are fetched first, then everything renders
+    if (this.hass && !languageReady(this.hass.language)) void loadLanguage(this.hass.language).then(() => this.requestUpdate());
     // the floors of the plan, for the floor choice
     if (this.hass && !this.loading && !this._floors.length) {
       this.loading = true;
@@ -214,6 +216,7 @@ export class Floorplan3dCardEditor extends LitElement {
   }
 
   protected render() {
+    if (this.hass && !languageReady(this.hass.language)) return nothing;
     const v = this.value;
     const flows = v.flows === undefined ? "switch" : v.flows ? "on" : "off";
     return html`

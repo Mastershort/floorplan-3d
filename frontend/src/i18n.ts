@@ -1940,9 +1940,51 @@ const en: Record<Key, string> = {
 
 export type I18nKey = Key;
 
+declare const __FP3D_LANG_HASH__: string;
+
+/**
+ * Languages beyond German and English live in lang/<code>.json next to the bundles (so wall tablets never
+ * load texts they do not need) and are fetched once when Home Assistant runs in that language. Missing
+ * keys fall back to English.
+ */
+export const EXTRA_LANGUAGES = ["fr", "es", "nl", "it"] as const;
+const extra = new Map<string, Record<string, string>>();
+const pending = new Map<string, Promise<void>>();
+
+/** The language file a Home Assistant language needs (null: German or English, built in). */
+export function languageCode(lang: string | undefined): string | null {
+  const code = (lang ?? navigator.language).toLowerCase().slice(0, 2);
+  return (EXTRA_LANGUAGES as readonly string[]).includes(code) ? code : null;
+}
+
+/** Whether the texts for a language are at hand (built in, or already fetched). */
+export function languageReady(lang: string | undefined): boolean {
+  const code = languageCode(lang);
+  return !code || extra.has(code);
+}
+
+/** Fetch a language's texts (once); a missing or broken file leaves English in place. */
+export function loadLanguage(lang: string | undefined): Promise<void> {
+  const code = languageCode(lang);
+  if (!code || extra.has(code)) return Promise.resolve();
+  let p = pending.get(code);
+  if (!p) {
+    const url = new URL(`./lang/${code}.json?v=${typeof __FP3D_LANG_HASH__ === "string" ? __FP3D_LANG_HASH__ : "0"}`, import.meta.url).href;
+    p = fetch(url)
+      .then((r) => (r.ok ? r.json() : {}))
+      .then((table: Record<string, string>) => void extra.set(code, table && typeof table === "object" ? table : {}))
+      .catch(() => void extra.set(code, {}))
+      .finally(() => pending.delete(code));
+    pending.set(code, p);
+  }
+  return p;
+}
+
 export function translate(hass: HomeAssistant | undefined, key: Key, vars: Record<string, string | number> = {}): string {
-  const table = (hass?.language ?? navigator.language).startsWith("de") ? de : en;
-  let s: string = table[key] ?? de[key] ?? key;
+  const lang = hass?.language ?? navigator.language;
+  const code = lang.startsWith("de") ? null : languageCode(lang);
+  const table: Record<string, string> = lang.startsWith("de") ? de : (code && extra.get(code)) || en;
+  let s: string = table[key] ?? en[key] ?? de[key] ?? key;
   for (const [k, v] of Object.entries(vars)) s = s.replace(`{${k}}`, String(v));
   return s;
 }
