@@ -1,6 +1,6 @@
 // Lit wrapper around the lazily loaded 3D viewer.
 
-import { css, html, LitElement, nothing, type PropertyValues } from "lit";
+import { css, html, LitElement, nothing, svg, type PropertyValues } from "lit";
 import {
   appColor,
   areaEntities,
@@ -23,7 +23,7 @@ import {
 } from "../devices.ts";
 import { alertColor, alertEntities, alertSources, alertText, findAlerts, type Alert, type AlertSources } from "../alerts.ts";
 import { iconPath, iconSvg } from "../icons.ts";
-import { deviceSensors, energySummary, fieldLevels, fieldPowers, findConsumers, flowColor, flowSegments, powerSensorFor, readPower, type Consumer, type EnergySummary } from "../energy.ts";
+import { deviceSensors, energySummary, fetchSolarDay, fieldLevels, fieldPowers, findConsumers, flowColor, flowSegments, powerSensorFor, readPower, solarCurvePath, type Consumer, type EnergySummary, type SolarDay } from "../energy.ts";
 import { STAGE, type Theme } from "../themes.ts";
 import { HEAT_SCALES, heatColor, heatGradient, roomValues, type HeatMode } from "../heatmap.ts";
 import { furnitureName } from "../furniture-names.ts";
@@ -80,6 +80,9 @@ export class Fp3dView3d extends LitElement {
     _stats: { state: true },
     _error: { state: true },
     _energy: { state: true },
+    _holo: { state: true },
+    _holoOpen: { state: true },
+    _wallboxW: { state: true },
     _flows: { state: true },
     _swipe: { state: true },
     _menu: { state: true },
@@ -149,6 +152,14 @@ export class Fp3dView3d extends LitElement {
   private declare _stats: ViewerStats | null;
   private declare _error: string | null;
   private declare _energy: EnergySummary | null;
+  /** Energie Pro: today's solar statistics for the hologram (kWh, peak and the day curve). */
+  private declare _holo: SolarDay | null;
+  private declare _holoOpen: boolean;
+  /** Power of the wallboxes in the plan (W), for the hologram. */
+  private declare _wallboxW: number | null;
+  private holoTimer: ReturnType<typeof setInterval> | undefined;
+  private holoEl: HTMLElement | null = null;
+  private holoIds = "";
   /** A running swipe on a lamp or blind: the value shown next to the finger. */
   private declare _swipe: { entity: string; kind: "light" | "cover"; start: number; value: number; x: number; y: number } | null;
   /** Quick menu at a device (long press). */
@@ -251,6 +262,9 @@ export class Fp3dView3d extends LitElement {
     this._stats = null;
     this._error = null;
     this._energy = null;
+    this._holo = null;
+    this._holoOpen = true;
+    this._wallboxW = null;
     this._swipe = null;
     this._menu = null;
     this._through = null;
@@ -295,6 +309,8 @@ export class Fp3dView3d extends LitElement {
     this.cameraTimer = undefined;
     clearInterval(this.trailTimer);
     this.trailTimer = undefined;
+    clearInterval(this.holoTimer);
+    this.holoTimer = undefined;
     clearTimeout(this.flashTimer);
     this.flashTimer = undefined;
     this.viewer?.dispose();
@@ -352,6 +368,7 @@ export class Fp3dView3d extends LitElement {
       this.viewer.setFurnishMode(this.furnish);
       this.viewer.setSurfaceGrab(this.surfaceGrab ?? null);
       this.viewer.setFurnishTypes(this.furnishTypes ?? null);
+      this.viewer.setAnchorCallback((x, y, on) => this.placeHolo(x, y, on));
       this.viewer.setFloorStack(this.floorStack);
       this.viewer.setStats(this.showStats);
       this.viewer.setAutoOrbit(this.autoOrbit ? 0.06 : 0);
@@ -564,6 +581,105 @@ export class Fp3dView3d extends LitElement {
     const energy = hasEnergy ? summary : null;
     // a new object would make Lit render again; only changed values do
     if (JSON.stringify(energy) !== JSON.stringify(this._energy)) this._energy = energy;
+    const wallboxW = consumers.some((c) => c.wallbox) ? consumers.filter((c) => c.wallbox).reduce((s, c) => s + c.power, 0) : null;
+    if (wallboxW !== this._wallboxW) this._wallboxW = wallboxW;
+    // the hologram's day curve: the solar sensors' statistics, fetched now and then while the sun is watched
+    const solarIds = pro && summary.solar !== null ? (b.energy.solar ? [b.energy.solar] : deviceSensors(b, (f) => this.furnitureLinks?.get(f.id)?.power ?? null).solar) : [];
+    this.watchSolarDay(solarIds);
+  }
+
+  /** Fetch today's solar statistics every five minutes while there are sensors to watch (none: the curve goes). */
+  private watchSolarDay(ids: string[]): void {
+    const key = ids.join(",");
+    if (key === this.holoIds) return;
+    this.holoIds = key;
+    clearInterval(this.holoTimer);
+    this.holoTimer = undefined;
+    if (!ids.length) {
+      this._holo = null;
+      return;
+    }
+    const fetch = async () => {
+      if (!this.hass || document.hidden) return;
+      const day = await fetchSolarDay(this.hass, ids);
+      if (this.holoIds === key) this._holo = day;
+    };
+    void fetch();
+    this.holoTimer = setInterval(() => void fetch(), 300000);
+  }
+
+  /** Moves the hologram to its anchor on screen (called by the viewer after every frame). */
+  private placeHolo(x: number, y: number, on: boolean): void {
+    const el = (this.holoEl ??= this.renderRoot.querySelector<HTMLElement>(".fp3d-holo"));
+    if (!el) return;
+    const hidden = !on;
+    if (el.hidden !== hidden) el.hidden = hidden;
+    if (!on) return;
+    // beside its anchor, but never off the stage: it slides left along the edge when the house sits far right
+    const stage = el.offsetParent as HTMLElement | null;
+    const w = el.offsetWidth || 236;
+    const h = el.offsetHeight || 200;
+    const left = Math.max(8, Math.min((stage?.clientWidth ?? Infinity) - w - 8, x + 10));
+    const top = Math.max(8 + h / 2, Math.min((stage?.clientHeight ?? Infinity) - h / 2 - 8, y));
+    el.style.transform = `translate(${Math.round(left)}px, ${Math.round(top)}px) translate(0, -50%)`;
+  }
+
+  /** Energie Pro: the glass hologram beside the house with the solar and energy balance of the moment. */
+  private renderHologram() {
+    const e = this._energy;
+    if (!hasFeature("energy_pro") || !e || e.solar === null || this.roomId || this.floorId !== null || !this.showEnergy) {
+      this.holoEl = null;
+      return nothing;
+    }
+    const hass = this.hass;
+    const t = (k: Parameters<typeof translate>[1]) => translate(hass, k);
+    const open = this._holoOpen;
+    const day = this._holo;
+    const autarky = e.consumption !== null && e.consumption > 0 ? Math.round(Math.min(100, Math.max(0, (1 - Math.max(0, e.grid ?? 0) / e.consumption) * 100))) : null;
+    const curve = day && day.curve.length > 1 ? solarCurvePath(day.curve, day.peak) : null;
+    const nowX = ((new Date().getHours() + new Date().getMinutes() / 60) / 24) * 220;
+    return html`<div class="fp3d-holo ${open ? "" : "fp3d-holo-min"}" hidden role="button" tabindex="0" aria-label=${t("holo_title")} @click=${() => (this._holoOpen = !this._holoOpen)}>
+      <div class="fp3d-holo-sheen"></div>
+      <div class="fp3d-holo-scan"></div>
+      <div class="fp3d-holo-body">
+        <div class="fp3d-holo-head"><span>☀ ${t("holo_title")}</span><span class="fp3d-holo-live">● ${t("holo_live")}</span></div>
+        <div class="fp3d-holo-big"><b>${formatPower(hass, e.solar)}</b><span>${t("holo_pv_now")}</span></div>
+        ${open
+          ? html`${day
+                ? html`<div class="fp3d-holo-sub">${t("holo_today")} <b>${formatNumber(hass, day.kwh, 1)} kWh</b> · ${t("holo_peak")} <b>${formatPower(hass, day.peak)}</b></div>`
+                : nothing}
+              ${curve
+                ? svg`<svg class="fp3d-holo-curve" viewBox="0 0 220 44" width="208" height="38">
+                    <defs><linearGradient id="fp3dHoloG" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#ffd75a" stop-opacity=".5"/><stop offset="1" stop-color="#ffd75a" stop-opacity="0"/></linearGradient></defs>
+                    <path d="${curve.area}" fill="url(#fp3dHoloG)"/>
+                    <path d="${curve.line}" fill="none" stroke="#ffe27a" stroke-width="2"/>
+                    <circle cx="${curve.endX}" cy="${curve.endY}" r="3.5" fill="#fff" stroke="#ffd75a" stroke-width="2"/>
+                    <line x1="0" y1="43.5" x2="220" y2="43.5" stroke="rgba(160,240,255,.35)"/>
+                    <line x1="${nowX}" y1="2" x2="${nowX}" y2="43" stroke="rgba(160,240,255,.18)" stroke-dasharray="2 3"/>
+                  </svg>`
+                : nothing}
+              <div class="fp3d-holo-grid">
+                ${e.battery !== null || e.soc !== null
+                  ? html`<div class="fp3d-holo-cell fp3d-holo-bat">
+                      ${t("holo_battery")}<br /><b>${e.soc !== null ? `${Math.round(e.soc)} %` : formatPower(hass, Math.abs(e.battery ?? 0))}</b>
+                      ${e.battery !== null && Math.abs(e.battery) >= 5 ? html`<span>${e.battery < 0 ? "▲" : "▼"} ${formatPower(hass, Math.abs(e.battery))}</span>` : nothing}
+                    </div>`
+                  : nothing}
+                ${e.grid !== null
+                  ? html`<div class="fp3d-holo-cell ${e.grid < -5 ? "fp3d-holo-exp" : "fp3d-holo-imp"}">
+                      ${t("holo_grid")}<br /><b>${formatPower(hass, Math.abs(e.grid))}</b> <span>${Math.abs(e.grid) < 5 ? "" : t(e.grid < 0 ? "energy_grid_export" : "energy_grid_import")}</span>
+                    </div>`
+                  : nothing}
+                ${e.consumption !== null ? html`<div class="fp3d-holo-cell fp3d-holo-house">${t("holo_house")}<br /><b>${formatPower(hass, e.consumption)}</b></div>` : nothing}
+                ${this._wallboxW !== null ? html`<div class="fp3d-holo-cell fp3d-holo-wb">${t("holo_wallbox")}<br /><b>${formatPower(hass, this._wallboxW)}</b></div>` : nothing}
+              </div>
+              ${autarky !== null
+                ? html`<div class="fp3d-holo-bar"><div style="width:${autarky}%"></div></div>
+                    <div class="fp3d-holo-foot"><span>${t("holo_autarky")}</span><b>${autarky} %</b></div>`
+                : nothing}`
+          : nothing}
+      </div>
+    </div>`;
   }
 
   /** New warnings start the pulse (and a jump to the room when wanted); none stops it. */
@@ -1408,7 +1524,7 @@ export class Fp3dView3d extends LitElement {
       class="fp3d-stage ${this.roomLabels ? "" : "fp3d-no-room-names"} ${this._low ? "fp3d-low" : ""} ${this.panelOpen ? "fp3d-panel-open" : ""} ${this._alerts.length ? "fp3d-has-alerts" : ""} ${this._through ? "fp3d-through-on" : ""} ${this._flash ? "fp3d-flash" : ""}"
       style=${style}
     >
-      ${this._error ? html`<p class="fp3d-error">${this._error}</p>` : nothing} ${this.renderEnergy()} ${this.renderLegend()}
+      ${this._error ? html`<p class="fp3d-error">${this._error}</p>` : nothing} ${this.renderEnergy()} ${this.renderHologram()} ${this.renderLegend()}
       ${this.renderAlerts()} ${this.renderThumbs()} ${this.renderScenes()} ${this.renderFind()} ${this.renderSwipe()} ${this.renderThrough()} ${this.renderProHint()} ${this.renderMenu()}
       ${this.showStats && this._stats
         ? html`<span class="fp3d-stats"
@@ -1991,6 +2107,150 @@ export class Fp3dView3d extends LitElement {
       }
       .fp3d-legend-none {
         color: var(--fp3d-warm);
+      }
+      /* Energie Pro: the glass hologram beside the house */
+      .fp3d-holo {
+        position: absolute;
+        left: 0;
+        top: 0;
+        z-index: 4;
+        width: 236px;
+        padding: 12px 14px 11px;
+        border-radius: 16px;
+        overflow: hidden;
+        cursor: pointer;
+        background: linear-gradient(140deg, rgba(150, 235, 255, 0.2) 0%, rgba(70, 140, 230, 0.08) 45%, rgba(20, 60, 140, 0.05) 100%);
+        backdrop-filter: blur(7px) saturate(150%);
+        -webkit-backdrop-filter: blur(7px) saturate(150%);
+        border: 1px solid rgba(160, 240, 255, 0.55);
+        box-shadow:
+          0 0 28px rgba(55, 224, 255, 0.35),
+          0 0 2px rgba(200, 250, 255, 0.9),
+          inset 0 1px 0 rgba(255, 255, 255, 0.45),
+          inset 0 0 36px rgba(55, 224, 255, 0.14);
+        color: #e6fbff;
+        font-size: 12px;
+        line-height: 1.35;
+        text-shadow: 0 0 6px rgba(80, 220, 255, 0.55);
+        will-change: transform;
+      }
+      .fp3d-holo[hidden] {
+        display: none;
+      }
+      .fp3d-holo-min {
+        width: 150px;
+      }
+      .fp3d-holo-sheen {
+        position: absolute;
+        inset: 0;
+        background: linear-gradient(115deg, rgba(255, 255, 255, 0.22) 0%, rgba(255, 255, 255, 0) 32%, rgba(255, 255, 255, 0) 68%, rgba(255, 255, 255, 0.07) 100%);
+        pointer-events: none;
+      }
+      .fp3d-holo-scan {
+        position: absolute;
+        inset: 0;
+        background: repeating-linear-gradient(0deg, rgba(160, 240, 255, 0.06) 0 1px, transparent 1px 4px);
+        pointer-events: none;
+      }
+      .fp3d-holo-body {
+        position: relative;
+      }
+      .fp3d-holo-head {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        font-size: 10px;
+        letter-spacing: 0.14em;
+        color: #8ff0ff;
+        text-transform: uppercase;
+      }
+      .fp3d-holo-live {
+        color: #5dffb0;
+      }
+      .fp3d-holo-big {
+        display: flex;
+        align-items: baseline;
+        gap: 9px;
+        margin: 6px 0 1px;
+      }
+      .fp3d-holo-big b {
+        font-size: 26px;
+        color: #ffe27a;
+        text-shadow: 0 0 12px rgba(255, 210, 80, 0.85);
+        font-variant-numeric: tabular-nums;
+      }
+      .fp3d-holo-big span,
+      .fp3d-holo-sub {
+        color: #aee9ff;
+      }
+      .fp3d-holo-sub {
+        margin-bottom: 6px;
+      }
+      .fp3d-holo-sub b,
+      .fp3d-holo-cell b,
+      .fp3d-holo-foot b {
+        color: #fff;
+        font-variant-numeric: tabular-nums;
+      }
+      .fp3d-holo-curve {
+        display: block;
+        margin-bottom: 7px;
+        filter: drop-shadow(0 0 4px rgba(255, 215, 90, 0.7));
+      }
+      .fp3d-holo-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 6px;
+      }
+      .fp3d-holo-cell {
+        border-left: 2px solid #aee9ff;
+        padding-left: 6px;
+      }
+      .fp3d-holo-cell span {
+        font-size: 11px;
+      }
+      .fp3d-holo-bat {
+        border-left-color: #5dffb0;
+      }
+      .fp3d-holo-bat span {
+        color: #5dffb0;
+      }
+      .fp3d-holo-exp {
+        border-left-color: #4ff6ff;
+      }
+      .fp3d-holo-exp span {
+        color: #4ff6ff;
+      }
+      .fp3d-holo-imp {
+        border-left-color: #ff6fb0;
+      }
+      .fp3d-holo-imp span {
+        color: #ff8fc4;
+      }
+      .fp3d-holo-house {
+        border-left-color: #a9c0ff;
+      }
+      .fp3d-holo-wb {
+        border-left-color: #63c9ff;
+      }
+      .fp3d-holo-bar {
+        margin-top: 8px;
+        height: 5px;
+        border-radius: 3px;
+        background: rgba(160, 240, 255, 0.16);
+        overflow: hidden;
+      }
+      .fp3d-holo-bar div {
+        height: 100%;
+        background: linear-gradient(90deg, #5dffb0, #4ff6ff);
+        box-shadow: 0 0 8px rgba(80, 240, 255, 0.8);
+      }
+      .fp3d-holo-foot {
+        display: flex;
+        justify-content: space-between;
+        margin-top: 3px;
+        font-size: 10px;
+        color: #aee9ff;
       }
       .fp3d-energy {
         position: absolute;

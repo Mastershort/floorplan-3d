@@ -757,6 +757,66 @@ function solarRoute(building: Building, f: SolarField, power: number, target: De
   return absolutePolyline(building, pts, power, "solar", floor);
 }
 
+/** Today's solar production for the hologram: energy so far, the peak and the curve since midnight. */
+export interface SolarDay {
+  kwh: number;
+  peak: number;
+  /** Mean power (W) per five minutes since midnight, in order. */
+  curve: number[];
+}
+
+/** One row of `recorder/statistics_during_period` (start as ISO text in older cores, epoch ms in newer ones). */
+export interface StatRow {
+  start: string | number;
+  mean?: number | null;
+}
+
+/** Today's statistics of the solar sensors added up: five-minute means since midnight. */
+export function solarDayFromStats(rows: Record<string, StatRow[]>, now = new Date()): SolarDay {
+  const midnight = new Date(now);
+  midnight.setHours(0, 0, 0, 0);
+  const slots = Math.max(1, Math.floor((now.getTime() - midnight.getTime()) / 300000) + 1);
+  const curve = new Array<number>(slots).fill(0);
+  for (const list of Object.values(rows)) {
+    for (const r of list) {
+      const start = typeof r.start === "number" ? r.start : Date.parse(r.start);
+      const i = Math.floor((start - midnight.getTime()) / 300000);
+      if (i < 0 || i >= slots || typeof r.mean !== "number") continue;
+      curve[i] += Math.max(0, r.mean);
+    }
+  }
+  const kwh = curve.reduce((s, w) => s + (w * 5) / 60 / 1000, 0);
+  return { kwh, peak: Math.max(0, ...curve), curve };
+}
+
+/** Fetch today's solar statistics (five-minute means) from the recorder. */
+export async function fetchSolarDay(hass: HomeAssistant, ids: string[]): Promise<SolarDay | null> {
+  const midnight = new Date();
+  midnight.setHours(0, 0, 0, 0);
+  try {
+    const rows = await hass.callWS<Record<string, StatRow[]>>({
+      type: "recorder/statistics_during_period",
+      start_time: midnight.toISOString(),
+      statistic_ids: ids,
+      period: "5minute",
+      types: ["mean"],
+    });
+    return solarDayFromStats(rows ?? {});
+  } catch {
+    return null;
+  }
+}
+
+/** The day curve as SVG paths (220 × 44 box): the line, the area under it and where it ends. */
+export function solarCurvePath(curve: readonly number[], peak: number): { line: string; area: string; endX: number; endY: number } {
+  const slots = 288;
+  const y = (w: number) => 42 - (peak > 0 ? (w / peak) * 36 : 0);
+  const pts = curve.map((w, i) => [(i / slots) * 220, y(w)] as const);
+  const line = pts.map(([x, py], i) => `${i ? "L" : "M"}${x.toFixed(1)} ${py.toFixed(1)}`).join(" ");
+  const [ex, ey] = pts[pts.length - 1];
+  return { line, area: `${line} L${ex.toFixed(1)} 44 L0 44 Z`, endX: ex, endY: ey };
+}
+
 /** Modules of a field (the ones left out do not count). */
 export function modulesOf(f: Pick<SolarField, "rows" | "cols" | "skip">): number {
   return Math.max(1, f.rows * f.cols - (f.skip?.length ?? 0));

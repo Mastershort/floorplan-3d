@@ -460,6 +460,8 @@ export class FloorplanViewer {
   /** Roof over the top floor (house view only), its opacity and the camera distance of the house view. */
   /** The roof: one group with a part per floor it sits on (each part follows its floor). */
   private roof: { group: Group; parts: { group: Group; floorId: string; base: number }[]; solid: MeshBasicMaterial; lines: LineBasicMaterial; glass: MeshBasicMaterial; live: MeshBasicMaterial; lives: SolarLive[] } | null = null;
+  /** Told where the hologram's anchor (beside the house, above the eaves) lies on screen after every frame. */
+  private anchorCb: ((x: number, y: number, visible: boolean) => void) | null = null;
   /** Energie Pro: production level (0..1) per solar field; the overlays animate while any is above zero. */
   private solarLevels = new Map<string, number>();
   private solarActive = false;
@@ -758,6 +760,13 @@ export class FloorplanViewer {
   }
 
   /** Energy cables; the stripes run while any cable carries power. */
+  /** The hologram follows a point beside the house: the callback gets its screen position after every frame. */
+  setAnchorCallback(cb: ((x: number, y: number, visible: boolean) => void) | null): void {
+    this.anchorCb = cb;
+    this.labelsDirty = true;
+    this.invalidate();
+  }
+
   /** Energie Pro: how much every solar field produces (0..1 of its peak); the modules glow and sweep with it. */
   setSolarLevels(levels: Map<string, number>): void {
     this.solarLevels = levels;
@@ -3164,6 +3173,21 @@ export class FloorplanViewer {
       placed[i].y = Math.max(placed[i].y, above.y + (above.h + placed[i].h) / 2 + 8);
     }
     for (const p of placed) this.place(p.fv.label, `translate(${p.left}px, ${p.y}px) translate(0, -50%)`);
+    if (this.anchorCb) {
+      // beside the house, to the right of its widest side and above the top floor's walls (the house view only)
+      let box: { x0: number; x1: number; z0: number; z1: number } | null = null;
+      let top = 0;
+      for (const fv of this.floors) {
+        if (!fv.bbox) continue;
+        box = box ? { x0: Math.min(box.x0, fv.bbox.x0), x1: Math.max(box.x1, fv.bbox.x1), z0: Math.min(box.z0, fv.bbox.z0), z1: Math.max(box.z1, fv.bbox.z1) } : { ...fv.bbox };
+        top = Math.max(top, fv.floor.elevation + fv.y + fv.floor.height);
+      }
+      if (box && this.floorId === null) {
+        v.set(box.x1 + 0.8, top + 1.1, (box.z0 + box.z1) / 2).project(this.camera);
+        const off = v.z > 1 || Math.abs(v.x) > 1.2 || Math.abs(v.y) > 1.2;
+        this.anchorCb(((v.x + 1) / 2) * w, ((1 - v.y) / 2) * h, !off);
+      } else this.anchorCb(0, 0, false);
+    }
     this.updateDevicePins(w, h);
     for (const fv of this.floors) {
       // in the house view, room labels would pile up between the floors; in a room its panel names it;

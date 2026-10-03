@@ -187,6 +187,19 @@
             case "neonplan3d/packs/install":
               license.packs = license.packs.map((p) => (p.id === msg.pack_id ? { ...p, installed: p.release } : p));
               return { id: msg.pack_id, name: msg.pack_id, publisher: "Mastershort", licensee: "Demo Kunde", release: 1, items: 0 };
+            case "recorder/statistics_during_period": {
+              // today's solar curve: a sunny day, five-minute means from midnight up to now
+              const midnight = new Date();
+              midnight.setHours(0, 0, 0, 0);
+              const slots = Math.floor((Date.now() - midnight.getTime()) / 300000) + 1;
+              const peak = Number(hass.states["sensor.pv_leistung"]?.state) > 2000 ? 7100 : 3400;
+              const curve = Array.from({ length: slots }, (_, i) => {
+                const h = (i * 5) / 60;
+                const sun = Math.max(0, Math.sin((Math.PI * (h - 6.2)) / 13.2));
+                return { start: midnight.getTime() + i * 300000, end: midnight.getTime() + (i + 1) * 300000, mean: Math.round(peak * Math.pow(sun, 1.6) * (0.9 + 0.1 * Math.sin(i * 0.7))) };
+              });
+              return Object.fromEntries((msg.statistic_ids ?? []).map((id) => [id, curve]));
+            }
             case "history/history_during_period": {
               // invented motion of the last half hour: hall, kitchen, then the living-room camera
               const now = Date.now() / 1000;

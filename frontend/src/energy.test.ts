@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { deviceSensors, energySummary, fieldPowers, findConsumers, flowColor, FLOW_COLORS, flowSegments, meterPosition, powerSensorFor, proposeEnergySensors, readPower } from "./energy.ts";
+import { deviceSensors, energySummary, fieldPowers, findConsumers, flowColor, FLOW_COLORS, flowSegments, meterPosition, powerSensorFor, proposeEnergySensors, readPower, solarCurvePath, solarDayFromStats } from "./energy.ts";
 import { proposeField, roofFaces } from "./solar.ts";
 import type { Building, Room } from "./model.ts";
 import { emptyBuilding, newFloor } from "./model.ts";
@@ -253,4 +253,27 @@ test("field powers: own sensor first, then the string's shared by modules, the r
   assert.equal(p.get("c"), 600);
   // 2300 - 500 - 800 = 1000 left for the field without a sensor
   assert.equal(p.get("d"), 1000);
+});
+
+test("today's solar statistics add up over the sensors: energy, peak and the curve since midnight", () => {
+  const now = new Date(2026, 9, 3, 12, 17);
+  const midnight = new Date(2026, 9, 3, 0, 0).getTime();
+  const slot = (i: number, mean: number) => ({ start: midnight + i * 300000, mean });
+  // two inverters: one row as ISO text (older cores), the rest as epoch ms
+  const rows = {
+    "sensor.pv1": [{ start: new Date(midnight + 100 * 300000).toISOString(), mean: 1000 }, slot(101, 2000), slot(500, 9999)],
+    "sensor.pv2": [slot(100, 500), slot(101, 500), slot(102, -5)],
+  };
+  const day = solarDayFromStats(rows, now);
+  assert.equal(day.curve.length, 12 * 12 + 3 + 1);
+  assert.equal(day.curve[100], 1500);
+  assert.equal(day.curve[101], 2500);
+  assert.equal(day.curve[102], 0);
+  assert.equal(day.peak, 2500);
+  // 1500 W and 2500 W for five minutes each
+  assert.ok(Math.abs(day.kwh - (4000 * 5) / 60 / 1000) < 1e-9);
+  const path = solarCurvePath(day.curve, day.peak);
+  assert.ok(path.line.startsWith("M0.0 42.0"));
+  assert.ok(path.area.endsWith("L0 44 Z"));
+  assert.ok(path.endX > 110 && path.endX < 115);
 });
