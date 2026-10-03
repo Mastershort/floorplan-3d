@@ -261,8 +261,9 @@ const OPENING_TAU = 160;
 /** Frame interval while only the energy flow moves (ms): about 30 frames per second. */
 const FLOW_FRAME_MS = 33;
 /** Cable core and the soft glow around it (m). */
-const CABLE_WIDTH = 0.035;
-const CABLE_HALO = 0.14;
+// thin cables with a faint halo: the moving light dots show the flow, not the cable
+const CABLE_WIDTH = 0.02;
+const CABLE_HALO = 0.07;
 const LAMP_BODY = 0x2a3a60;
 const LAMP_SHADE = 0x1d2946;
 /** Lamps that hang from the ceiling (hidden in the cut view). */
@@ -2193,7 +2194,7 @@ export class FloorplanViewer {
       const layers: [number, number][] = this.lowQuality
         ? [[CABLE_WIDTH * 1.4, 1]]
         : [
-            [CABLE_HALO, 0.3],
+            [CABLE_HALO, 0.25],
             [CABLE_WIDTH, 1],
           ];
       for (const [width, strength] of layers) {
@@ -3348,9 +3349,12 @@ function flowMaterial(time: { value: number }): MeshBasicMaterial {
         `#include <color_fragment>
         float fp3dAcross = 1.0 - abs(vFlowUv.y * 2.0 - 1.0);
         float fp3dMoving = step(0.001, abs(vFlowSpeed));
-        float fp3dPhase = (vFlowUv.x - uFlowTime * abs(vFlowSpeed) - vFlowOffset) * 2.5;
-        float fp3dStripe = smoothstep(0.5, 0.85, fract(fp3dPhase)) * fp3dMoving;
-        diffuseColor.rgb *= (0.4 + 1.1 * fp3dStripe) * (0.35 + 0.65 * fp3dAcross);`,
+        // light dots every third of a metre, each a comet: a bright head and a tail fading out behind it,
+        // so the direction (from a to b) is plain even on a still picture
+        float fp3dPhase = fract((vFlowUv.x - uFlowTime * abs(vFlowSpeed) - vFlowOffset) * 3.0);
+        float fp3dDot = exp(-(1.0 - fp3dPhase) * 7.0) * fp3dMoving;
+        float fp3dCore = fp3dAcross * fp3dAcross;
+        diffuseColor.rgb *= (0.3 + 1.7 * fp3dDot) * (0.2 + 0.8 * fp3dCore);`,
       );
   };
   m.customProgramCacheKey = () => "fp3d-flow";

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { deviceSensors, energySummary, findConsumers, flowColor, flowSegments, meterPosition, powerSensorFor, proposeEnergySensors, readPower } from "./energy.ts";
+import { deviceSensors, energySummary, fieldPowers, findConsumers, flowColor, FLOW_COLORS, flowSegments, meterPosition, powerSensorFor, proposeEnergySensors, readPower } from "./energy.ts";
+import { proposeField, roofFaces } from "./solar.ts";
 import type { Building, Room } from "./model.ts";
 import { emptyBuilding, newFloor } from "./model.ts";
 import type { HassEntity, HomeAssistant } from "./types.ts";
@@ -194,4 +195,62 @@ test("the energy dashboard leads to power sensors of the same devices", () => {
   assert.deepEqual(proposeEnergySensors(hass, prefs), { grid: "sensor.grid_power", solar: "sensor.pv_power", battery: "sensor.bat_power", battery_soc: "sensor.bat_soc" });
   // nothing set up: nothing proposed
   assert.deepEqual(proposeEnergySensors(hass, {}), {});
+});
+
+test("Pro cables: roof field → inverter, inverter → meter and battery, meter → wallbox and grid", () => {
+  const b = house();
+  b.energy = { ...b.energy, meter: null, grid: null, solar: null };
+  b.settings.roof = { type: "gable", pitch: 35, overhang: 0.4 };
+  const face = roofFaces(b)[0];
+  b.settings.roof.solar = [{ ...proposeField(face, "pv1"), entity: "sensor.pv1" }];
+  const furn = (id: string, type: string, x: number, z: number, extra: Record<string, unknown> = {}) => ({ id, type, x, z, rotation: 0, w: 0.5, d: 0.2, h: 0.65, variant: null, ...extra }) as Building["floors"][0]["furniture"][0];
+  b.floors[0].furniture.push(furn("m", "meter", 0.5, 0.3, { power: "sensor.grid" }), furn("inv", "inverter", 7, 0.3, { power: "sensor.pv1" }), furn("bat", "home_battery", 6, 0.3, { power: "sensor.bat" }), furn("wb", "wallbox", 5, 2.5, { power: "sensor.wb" }));
+  const hass = hassWith([power("sensor.grid", "-300"), power("sensor.pv1", "1200"), power("sensor.bat", "-250"), power("sensor.wb", "400"), power("sensor.pc_power", "70"), power("sensor.fridge_power", "0.085", "kW")]);
+  const consumers = findConsumers(hass, b);
+  consumers.push({ id: "wb", powerEntity: "sensor.wb", floorId: "eg", x: 5, z: 2.5, power: 400, wallbox: true });
+  const summary = energySummary(hass, b, consumers);
+  const segs = flowSegments({ building: b, consumers, summary, battery: { floorId: "eg", x: 6, z: 0.3 }, fieldPower: fieldPowers(hass, b, summary.solar) });
+  const kinds = new Set(segs.map((s) => s.kind));
+  assert.deepEqual([...kinds].sort(), ["battery", "consumer", "export", "inverter", "solar", "wallbox"]);
+  // the roof cable starts on the upper floor at the field and ends at the inverter's top on the ground floor
+  const solar = segs.filter((s) => s.kind === "solar");
+  assert.equal(solar[0].floorId, "og");
+  assert.equal(solar[0].power, 1200);
+  const last = solar[solar.length - 1];
+  assert.equal(last.floorId, "eg");
+  assert.deepEqual(last.b, [7, 1.75, 0.3]);
+  // the inverter feeds the meter with what the sun gives beyond charging the battery
+  const feed = segs.filter((s) => s.kind === "inverter");
+  assert.equal(feed[0].power, 950);
+  assert.deepEqual(feed[0].a.slice(0, 1).concat(feed[0].a.slice(2)), [7, 0.3]);
+  // the battery charges: its cable runs from the inverter to the battery
+  const bat = segs.filter((s) => s.kind === "battery");
+  assert.equal(bat[0].power, 250);
+  assert.deepEqual([bat[0].a[0], bat[0].a[2]], [7, 0.3]);
+  assert.deepEqual([bat[bat.length - 1].b[0], bat[bat.length - 1].b[2]], [6, 0.3]);
+  // the wallbox hangs on the meter with its own colour; 300 W go out to the grid
+  assert.ok(segs.some((s) => s.kind === "wallbox" && s.power === 400));
+  assert.equal(segs.find((s) => s.kind === "export")!.power, 300);
+  assert.deepEqual(flowColor("wallbox", summary), FLOW_COLORS.wallbox);
+  assert.deepEqual(flowColor("export", summary), FLOW_COLORS.export);
+});
+
+test("field powers: own sensor first, then the string's shared by modules, the rest from the plant", () => {
+  const b = house();
+  b.settings.roof = { type: "gable", pitch: 35, overhang: 0.4 };
+  const face = roofFaces(b)[0];
+  b.settings.roof.strings = [{ id: "s1", name: "S1", entity: "sensor.s1", inverter: null }];
+  b.settings.roof.solar = [
+    { ...proposeField(face, "a"), rows: 1, cols: 2, entity: "sensor.a" },
+    { ...proposeField(face, "b"), rows: 1, cols: 2, string: "s1" },
+    { ...proposeField(face, "c"), rows: 1, cols: 6, string: "s1" },
+    { ...proposeField(face, "d"), rows: 2, cols: 5 },
+  ];
+  const hass = hassWith([power("sensor.a", "500"), power("sensor.s1", "800")]);
+  const p = fieldPowers(hass, b, 2300);
+  assert.equal(p.get("a"), 500);
+  assert.equal(p.get("b"), 200);
+  assert.equal(p.get("c"), 600);
+  // 2300 - 500 - 800 = 1000 left for the field without a sensor
+  assert.equal(p.get("d"), 1000);
 });

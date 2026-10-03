@@ -137,6 +137,12 @@ const shots = [
   { name: "editor-energy-devices", query: "", width: 1500, height: 1000, editor: true, editorScript: "e._tool = 'energy'; e._floorId = 'eg'; e._solarId = null; setTimeout(() => e.fit(), 300);", afterWait: 1500 },
   { name: "editor-energy-add", query: "", width: 1500, height: 1000, editor: true, editorScript: "e._tool = 'energy'; e._floorId = 'eg'; e._solarId = null; setTimeout(() => e.addEnergyDevice('wallbox'), 500);", afterWait: 1800 },
   { name: "editor-solar-list", query: "", width: 1280, height: 900, editor: true, editorScript: "e._tool = 'energy'; e._solarId = null; setTimeout(() => e.fit(), 300);" },
+  // Energie Pro: the cables from the roof to the inverter, battery, meter, wallbox and grid with their moving dots
+  { name: "view-flows", query: "?flows", width: 1280, height: 800, editor: true, editorScript: "e.fit();", then3d: "Alle Etagen", then3dAlso: ["Gestapelt"], camera: { theta: 0.6, phi: 1.15, radius: 22 } },
+  { name: "view-flows-garage", query: "?flows", width: 1280, height: 800, editor: true, editorScript: "e.fit();", then3d: "Alle Etagen", then3dAlso: ["Gestapelt"], camera: { theta: 3.6, phi: 1.2, radius: 16 } },
+  { name: "view-flows-eg", query: "?flows", width: 1280, height: 800, editor: true, editorScript: "e.fit();", then3d: "Erdgeschoss", camera: { theta: 0.25, phi: 1.2, radius: 11 } },
+  { name: "view-flows-room", query: "?flows", width: 1280, height: 800, click: "Erdgeschoss", then: "Garage" },
+  { name: "view-flows-back", query: "?flows", width: 1280, height: 800, editor: true, editorScript: "e.fit();", then3d: "Alle Etagen", then3dAlso: ["Gestapelt"], camera: { theta: 2.6, phi: 1.1, radius: 18 } },
   { name: "editor-solar-flat", query: "", width: 1500, height: 900, editor: true, editorScript: "e.change((d) => { d.settings.roof.type = 'flat'; d.settings.roof.solar = []; }); setTimeout(() => { e._tool = 'energy'; e.addSolarField(); }, 500); setTimeout(() => e.fit(), 900);", afterWait: 2000 },
   { name: "editor-roof-overview", query: "", width: 1280, height: 900, editor: true, editorScript: FARM_SCRIPT + "e._floorId = e._doc.floors[0].id; e._tool = 'roof'; e._roofId = null; setTimeout(() => e.fit(), 300);" },
   { name: "view-roof-proposal", query: "", width: 1280, height: 800, editor: true, editorScript: FARM_SCRIPT + "setTimeout(() => { e._doc.settings.roof.sections = []; e.useRoofSections(); }, 300);", then3d: "Alle Etagen", then3dAlso: "Gestapelt", camera: { theta: 2.3, phi: 0.95, radius: 52 } },

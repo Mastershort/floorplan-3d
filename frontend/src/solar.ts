@@ -144,7 +144,7 @@ export function proposeGroundField(b: Building, id: string): SolarField {
 }
 
 /** The floor the single roof sits on: the highest with rooms (as the roof itself). */
-function topFloor(b: Building): Floor | null {
+export function topFloor(b: Building): Floor | null {
   const withRooms = b.floors.filter((f) => f.rooms.some((r) => r.points.length >= 3));
   return withRooms.sort((p, q) => q.elevation - p.elevation)[0] ?? null;
 }

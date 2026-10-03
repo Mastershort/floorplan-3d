@@ -23,7 +23,7 @@ import {
 } from "../devices.ts";
 import { alertColor, alertEntities, alertSources, alertText, findAlerts, type Alert, type AlertSources } from "../alerts.ts";
 import { iconPath, iconSvg } from "../icons.ts";
-import { deviceSensors, energySummary, findConsumers, flowColor, flowSegments, powerSensorFor, readPower, type Consumer, type EnergySummary } from "../energy.ts";
+import { deviceSensors, energySummary, fieldPowers, findConsumers, flowColor, flowSegments, powerSensorFor, readPower, type Consumer, type EnergySummary } from "../energy.ts";
 import { STAGE, type Theme } from "../themes.ts";
 import { HEAT_SCALES, heatColor, heatGradient, roomValues, type HeatMode } from "../heatmap.ts";
 import { furnitureName } from "../furniture-names.ts";
@@ -440,6 +440,8 @@ export class Fp3dView3d extends LitElement {
       const furniture = [...this.furnitureLinks.values()].flatMap((l) => [l.entity, l.power]);
       const doors = b.floors.flatMap((f) => f.furniture.flatMap((m) => [m.door_left ?? null, m.door_right ?? null, m.soc ?? null, m.status ?? null]));
       const roofWindowIds = (b.settings.roof?.windows ?? []).flatMap((w) => [w.cover, w.contact, w.tilt]).filter((x): x is string => !!x && x !== "none");
+      // the solar fields' and strings' sensors feed the roof cables
+      const solarIds = [...(b.settings.roof?.solar ?? []).map((f) => f.entity), ...(b.settings.roof?.strings ?? []).map((s) => s.entity)].filter((x): x is string => !!x && x !== "none");
       const robotRooms = b.floors.flatMap((f) => f.furniture.filter((m) => m.type === "robot_vacuum").map((m) => robotRoomSensor(hass, this.furnitureLinks.get(m.id)?.entity ?? null, m.room_sensor)));
       const pictureRules = b.floors.flatMap((f) => f.furniture.flatMap((m) => (m.pictures ?? []).flatMap((r) => [r.entity, ...(r.image.startsWith("camera:") ? [r.image.slice(7)] : [])])));
       const heat =
@@ -451,7 +453,7 @@ export class Fp3dView3d extends LitElement {
       const parking = parkingEntities(b.floors);
       const motion = trailSources(hass, b).map((s) => s.entity);
       const weather = weatherEntity(hass, this.weatherEntityId ?? b.settings.weather_entity);
-      const all = [...placed, ...cameraSensors, ...links, ...power, ...furniture, ...doors, ...robotRooms, ...roofWindowIds, ...pictureRules, e.grid, e.solar, e.battery, e.battery_soc, e.consumption, e.tariff, ...presence, ...lights, ...heat, ...warn, ...parking, ...motion, weather, "sun.sun"];
+      const all = [...placed, ...cameraSensors, ...links, ...power, ...furniture, ...doors, ...robotRooms, ...roofWindowIds, ...solarIds, ...pictureRules, e.grid, e.solar, e.battery, e.battery_soc, e.consumption, e.tariff, ...presence, ...lights, ...heat, ...warn, ...parking, ...motion, weather, "sun.sun"];
       this.watched = [...new Set(all.filter((id): id is string => !!id))];
       force = true;
     }
@@ -525,7 +527,7 @@ export class Fp3dView3d extends LitElement {
     v.setFlows(
       !hasFeature("energy_pro") || !(this.flows ?? this._flows) || this.dimmed
         ? []
-        : flowSegments({ building: b, consumers, summary, battery: batteryPlaced ?? null }).map((f) => ({
+        : flowSegments({ building: b, consumers, summary, battery: batteryPlaced ?? null, fieldPower: fieldPowers(hass, b, summary.solar) }).map((f) => ({
         floorId: f.floorId,
         a: f.a,
         b: f.b,
@@ -685,7 +687,7 @@ export class Fp3dView3d extends LitElement {
         const power = link.power ? readPower(hass.states[link.power], invert) : null;
         if (link.power && power !== null && !consumerSensors.has(link.power)) {
           consumerSensors.add(link.power);
-          consumers.push({ id, powerEntity: link.power, floorId: floor.id, x: f.x, z: f.z, power: Math.max(0, power) });
+          consumers.push({ id, powerEntity: link.power, floorId: floor.id, x: f.x, z: f.z, power: Math.max(0, power), wallbox: f.type === "wallbox" || undefined });
         }
         const running = (power ?? 0) > 10 || st?.state === "on" || st?.state === "running" || (isStatusSensor(st) && isActive(st));
         if (f.type === "radiator" && st && kindOf(st.entity_id) === "climate") {
