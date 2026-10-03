@@ -16,7 +16,7 @@
     <neonplan3d-panel></neonplan3d-panel>
     <script type="module">
       // Mock of the Home Assistant frontend object with invented demo data.
-      import { DEMO_AREAS, DEMO_BUILDING, DEMO_FLOORS, DEMO_PACK, DEMO_ENTITIES, DEMO_STATES, DEMO_PICTURES } from "./demo-data.js";
+      import { DEMO_AREAS, DEMO_BUILDING, DEMO_FLOORS, DEMO_PACK, DEMO_ENTITIES, DEMO_STATES, DEMO_PICTURES, demoAttic, demoAFrame } from "./demo-data.js";
 
       const params = new URLSearchParams(location.search);
       // the shop connection of the demo: connected when ?shop is given, with one pack to install and one update
@@ -44,7 +44,13 @@
         loyalty: params.has("shop") ? { code: "NP-TREUE-DEMO42", percent: 10 } : null,
         updates: params.has("shop") ? [{ id: "mastershort.kitchen", name: "Küche", release: 2, added: 10, at: Date.now() / 1000 - 600 }] : [],
       };
-      let building = params.has("empty") ? { version: 1, floors: [], settings: { wall_exterior: 0.24, wall_interior: 0.12, grid: 0.05 } } : DEMO_BUILDING;
+      let building = params.has("empty")
+        ? { version: 1, floors: [], settings: { wall_exterior: 0.24, wall_interior: 0.12, grid: 0.05 } }
+        : params.has("attic")
+          ? demoAttic()
+          : params.has("aframe")
+            ? demoAFrame()
+            : DEMO_BUILDING;
       let revision = 1;
       const images = { ...DEMO_PICTURES };
       const listeners = new Set();

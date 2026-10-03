@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { emptyBuilding, newFloor, type Room, type RoofSection } from "./model.ts";
-import { ridgeHeight, roofSectionsFromRooms, sectionFrame, sectionOverhang, sectionProfile, wallTopUnder } from "./roof-sections.ts";
+import { insideRooms, ridgeHeight, ROOF_THICK, roofCeiling, dormerFor, dormerHole, hostTop, roofSectionsFromRooms, sectionFrame, sectionOverhang, sectionProfile, wallTopUnder } from "./roof-sections.ts";
 import { buildRoof } from "./viewer/roof.ts";
 
 const near = (a: number, b: number, eps = 1e-6) => assert.ok(Math.abs(a - b) < eps, `${a} != ${b}`);
@@ -124,4 +124,97 @@ test("a canopy over a terrace draws see-through panels and posts instead of wall
   near(Math.min(...ys), 0);
   // the side at the house wall has no overhang
   assert.equal(sectionOverhang(b, canopy, 0.15).b, 0);
+});
+
+const withSections = (sections: RoofSection[]) => {
+  const b = emptyBuilding();
+  b.settings = { ...b.settings, roof: { type: "custom", pitch: 45, overhang: 0.4, sections } };
+  return b;
+};
+
+test("the roof's underside over the plan: the profile less the roof's thickness, nothing outside", () => {
+  const c = roofCeiling(withSections([section()]))!;
+  // 45°: one metre in from the eave the underside is one metre higher
+  near(c.at(6, 1)!, 4 - ROOF_THICK);
+  near(c.at(6, 7)!, 4 - ROOF_THICK);
+  near(c.at(6, 4)!, 7 - ROOF_THICK);
+  assert.equal(c.at(-1, 4), null);
+  // a single roof sits on the walls and cuts nothing
+  const single = emptyBuilding();
+  single.settings = { ...single.settings, roof: { type: "gable", pitch: 35, overhang: 0.4 } };
+  assert.equal(roofCeiling(single), null);
+  // canopies do not count
+  assert.equal(roofCeiling(withSections([section({ open: true })])), null);
+});
+
+test("the ceiling bends at the ridge and the section's edges, and the higher of two sections wins", () => {
+  const c = roofCeiling(withSections([section(), section({ id: "low", x0: 10, x1: 16, eave_a: 1, eave_b: 1, pitch_a: 20, pitch_b: 20 })]))!;
+  // a line across the ridge (along z at x = 6) bends at z = 0, 4 and 8
+  assert.deepEqual([...new Set(c.breaks([6, -1], [6, 9]).map((t) => Math.round(t * 1000) / 1000))].filter((t) => t > 0 && t < 1), [0.1, 0.5, 0.9]);
+  // where the low lean-to runs under the main roof, the main roof is the ceiling
+  near(c.at(11, 1)!, 4 - ROOF_THICK);
+  // beyond the main roof the lean-to is
+  near(c.at(14, 0)!, 1 - ROOF_THICK);
+});
+
+test("a hip roof slopes down towards its ends, and the 1.5 m line turns round them", () => {
+  const c = roofCeiling(withSections([section({ shape: "hip" })]))!;
+  // the run of the hips is half the width (4 m): 1 m in from the end the underside is 1 m above the eave
+  near(c.at(1, 4)!, 4 - ROOF_THICK);
+  near(c.at(6, 4)!, 7 - ROOF_THICK);
+  const lines = c.contour(4 - ROOF_THICK);
+  assert.equal(lines.length, 4);
+});
+
+test("an A-frame: the underside comes down to the ground at the eaves", () => {
+  const c = roofCeiling(withSections([section({ eave_a: 0, eave_b: 0, pitch_a: 60, pitch_b: 60, base: 0 })]))!;
+  near(c.at(6, 0)!, -ROOF_THICK);
+  near(c.at(6, 1)!, Math.tan((60 * Math.PI) / 180) - ROOF_THICK);
+  // the line at 1.5 m runs along both slopes, as far in as the slope needs to rise to it
+  const [a] = c.contour(1.5);
+  near(a[0][1], (1.5 + ROOF_THICK) / Math.tan((60 * Math.PI) / 180));
+});
+
+test("a line cut to the rooms", () => {
+  const parts = insideRooms([-1, 1], [9, 1], [rect("a", 0, 0, 3, 3), rect("b", 5, 0, 8, 3)]);
+  assert.deepEqual(parts.map(([p, q]) => [p[0], q[0]]), [[0, 3], [5, 8]]);
+});
+
+test("a dormer sits on the slope tapped: front at the eave, across the ridge, its ridge running into the slope", () => {
+  const host = section();
+  const d = dormerFor(host, [6, 1.5], "d")!;
+  assert.equal(d.dormer, true);
+  assert.equal(d.axis, "z");
+  near(d.x1 - d.x0, 2);
+  near((d.x0 + d.x1) / 2, 6);
+  // front flush with side a's eave (z = 0), as deep as its ridge needs to meet the slope
+  near(d.z0, 0);
+  const ridge = ridgeHeight(d);
+  assert.ok(Math.abs(hostTop([host], [6, d.z1]) ?? 0) >= ridge - 0.2 && ridge > d.eave_a);
+  // its eaves stand above the host's eave, below its ridge
+  assert.ok(d.eave_a > host.eave_a && ridge < ridgeHeight(host));
+  // on side b the front is at the other eave; off the slopes there is none
+  near(dormerFor(host, [6, 6.5], "d2")!.z1, 8);
+  assert.equal(dormerFor(host, [-1, 2], "x"), null);
+  // under the dormer the ceiling is the dormer's, higher than the slope
+  const c = roofCeiling(withSections([host, d]))!;
+  assert.ok(c.at(6, 0.5)! > roofCeiling(withSections([host]))!.at(6, 0.5)! + 1);
+});
+
+test("a dormer gets cheeks down to the slope it sits on, and the slope opens under it", () => {
+  const host = section();
+  const d = dormerFor(host, [6, 1.5], "d")!;
+  const tris = (secs: RoofSection[]) => {
+    const b = withSections(secs);
+    b.floors = [{ ...newFloor("eg", "EG", 0), rooms: [rect("r", 0, 0, 12, 8)] }];
+    return buildRoof(b)[0].solid.count;
+  };
+  assert.ok(tris([host, d]) > tris([host, { ...d, dormer: false }]), "the cheeks and the opening add triangles");
+  const ring = dormerHole(host, d)!;
+  // front edge at the eave, the point under its ridge further back than the eave lines' ends
+  assert.equal(ring.length, 5);
+  near(ring[0][1], 0);
+  near(ring[4][1], 0);
+  assert.ok(ring[2][1] > ring[1][1] && ring[2][1] > ring[3][1], "the ridge runs in furthest");
+  near(ring[2][0], 6);
 });

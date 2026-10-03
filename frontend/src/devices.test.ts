@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { appColor, areaEntities, otherAreaEntities, roomClimateSensors, roomClimateValue, unassignedEntities, autoPlace, entityName, fridgeDoors, furnitureEntities, groupByDevice, isActive, kindOf, lightGlow, openingEntities, openingState, powerSensorsOf, primaryEntities, roomPanelEntities, windowPosition, confirmEntities, robotRoom, robotRoomSensor, roomKey } from "./devices.ts";
+import { appColor, areaEntities, otherAreaEntities, roomClimateSensors, roomClimateValue, unassignedEntities, autoPlace, entityName, fridgeDoors, furnitureEntities, groupByDevice, isActive, kindOf, lightGlow, openingEntities, openingState, powerSensorsOf, primaryEntities, roomPanelEntities, windowPosition, confirmEntities, robotRoom, robotRoomSensor, roomKey, roofWindowEntities, roofWindowState } from "./devices.ts";
 import type { Floor, Opening, Room } from "./model.ts";
-import { centroid, newFloor, pointInPolygon } from "./model.ts";
+import { centroid, emptyBuilding, newFloor, pointInPolygon } from "./model.ts";
 import type { HomeAssistant } from "./types.ts";
 
 /** Opening state without the "sensed" flag (tested on its own below). */
@@ -463,6 +463,45 @@ test("a status sensor (a 3D printer) counts as active while it prints", () => {
   assert.equal(isActive(st("finish")), false);
   // an ordinary sensor is never "active"
   assert.equal(isActive(st("running", "temperature")), false);
+});
+
+test("roof windows take the sash motor, contact and blind of the room under them; the motor's position opens the sash", () => {
+  const hass = hassWith();
+  const add = (id: string, state: string, attributes: Record<string, unknown>) => {
+    hass.entities![id] = { entity_id: id, area_id: "wohnen" };
+    hass.states[id] = { entity_id: id, state, attributes };
+  };
+  add("cover.dachfenster", "open", { device_class: "window", current_position: 40 });
+  add("cover.dachfenster_rollo", "closed", { device_class: "blind", current_position: 0 });
+  add("binary_sensor.dachfenster_kontakt", "off", { device_class: "window" });
+  const b = emptyBuilding();
+  b.floors = [{ ...newFloor("dg", "DG", 2.75), rooms: [{ ...room, area_id: "wohnen" }] }];
+  const win = { id: "w1", face: "s:a", u: 1, v: 1, cover: "auto", contact: "auto", tilt: null, window: "auto" };
+  b.settings.roof = { ...b.settings.roof, windows: [win] };
+  const spot = { id: "w1", x: 2, z: 1.5, y: 4 };
+  const e = roofWindowEntities(hass, b, [spot]).get("w1")!;
+  assert.equal(e.window, "cover.dachfenster");
+  assert.equal(e.cover, "cover.dachfenster_rollo");
+  assert.equal(e.contact, "binary_sensor.dachfenster_kontakt");
+  const st = roofWindowState(hass, e);
+  assert.ok(Math.abs(st.open - 0.4) < 1e-9);
+  assert.equal(st.cover, 1);
+  // a contact that is open opens it all the way
+  hass.states["binary_sensor.dachfenster_kontakt"].state = "on";
+  assert.equal(roofWindowState(hass, e).open, 1);
+  // set by hand or switched off; and nothing found where no room is under it
+  b.settings.roof.windows = [{ ...win, window: "none", cover: "cover.x", contact: null }];
+  const manual = roofWindowEntities(hass, b, [spot]).get("w1")!;
+  assert.equal(manual.window, null);
+  assert.equal(manual.cover, "cover.x");
+  // empty stays none, as for roof windows from before "automatic" existed
+  assert.equal(manual.contact, null);
+  const outside = roofWindowEntities(hass, b, [{ ...spot, x: 50 }]).get("w1")!;
+  assert.equal(outside.contact, null);
+  // the wall windows of the room do not take what a roof window took
+  const taken = new Set(["binary_sensor.dachfenster_kontakt"]);
+  const o: Opening = { id: "o", room_id: "r", edge: 0, offset: 1, width: 1, type: "window", sill: 0.9, height: 1.3, hinge: "left", leaves: 1, swing: "in", cover: null, contact: null, contact2: null, tilt: null };
+  assert.equal(openingEntities(hass, [{ ...b.floors[0], rooms: [{ ...room, area_id: "wohnen" }], openings: [o] }], taken).get("o")?.contact ?? null, null);
 });
 
 test("an entity without a registry entry (a USB camera from YAML) is offered as unassigned", () => {

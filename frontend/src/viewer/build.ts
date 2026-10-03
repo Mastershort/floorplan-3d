@@ -18,9 +18,10 @@ import { holeInRoom, insetHole, mergeHoles } from "../geometry/holes.ts";
 import { pushFurniture } from "./furniture.ts";
 import { mountBase, packItem } from "../packs.ts";
 import { pushOutdoor } from "./outdoor.ts";
+import { ALWAYS, CAP_OFFSET, CUT_OFFSET, EDGE_BASE, EDGE_CUT, EDGE_SOFT, EDGE_TOP, GeoBuffer, LineBuffer, LOWER_OFFSET, pushPrism, pushSlopedPrism, triangulate } from "./geo.ts";
+import type { RoofCeiling } from "../roof-sections.ts";
 import { pushModules } from "./roof.ts";
 import type { RoofFace } from "../solar.ts";
-import { ALWAYS, CAP_OFFSET, CUT_OFFSET, EDGE_BASE, EDGE_CUT, EDGE_SOFT, EDGE_TOP, GeoBuffer, LineBuffer, LOWER_OFFSET, pushPrism, triangulate } from "./geo.ts";
 
 export { ALWAYS, CUT_OFFSET, GeoBuffer, LineBuffer, pushPrism, shade } from "./geo.ts";
 
@@ -83,6 +84,8 @@ export interface FloorGeometry {
   wallBuckets: number[];
   /** Triangle ranges of furniture in `walls`, for tapping furniture in 3D. */
   furnitureTris: { id: string; start: number; end: number }[];
+  /** Roof underside above a plan point in floor coordinates (Infinity where no sloped roof is). */
+  roofTop(p: Vec2): number;
 }
 
 export const SLAB = 0.2;
@@ -106,8 +109,12 @@ export function buildFloorGeometry(
   holes: Vec2[][] = [],
   /** Solar fields standing in this floor's garden, with their ground. */
   solar: { face: RoofFace; field: SolarField }[] = [],
+  /** The roof section above (attic floors): walls end at its underside. */
+  ceiling: RoofCeiling | null = null,
 ): FloorGeometry {
   const { walls } = generateWalls(floor.rooms, { exterior: wallExterior, interior: wallInterior }, floor.walls ?? []);
+  const cut = Math.min(floor.cut_height, floor.height);
+  const slope = slopeOf(floor, ceiling, cut);
 
   // ---------------------------------------------------------------- floors (with stair holes)
   const floorBuf = new GeoBuffer(true, true);
@@ -197,7 +204,8 @@ export function buildFloorGeometry(
     const roomLeft = wall.free ? ax[0] * (hp[1][0] - hp[0][0]) + ax[1] * (hp[1][1] - hp[0][1]) > 0 : wall.roomLeft === o.room_id;
     const nLeft: Vec2 = [-ax[1], ax[0]];
     const toRoom: Vec2 = roomLeft ? nLeft : [-nLeft[0], -nLeft[1]];
-    const top = Math.min(wallHeight(wall, floor.height) - 0.02, o.sill + o.height);
+    // an opening under a sloped roof ends below it
+    const top = Math.min(wallHeight(wall, floor.height) - 0.02, o.sill + o.height, slope.lowest(wall, s0, s0 + width) - 0.02);
     const sill = Math.max(0, Math.min(o.sill, top - 0.1));
     // looking at the wall from the room, "right" is (toRoom.z, -toRoom.x)
     const right: Vec2 = [toRoom[1], -toRoom[0]];
@@ -223,7 +231,6 @@ export function buildFloorGeometry(
   }
 
   // ---------------------------------------------------------------- wall solids
-  const cut = Math.min(floor.cut_height, floor.height);
   const wallBuf = new GeoBuffer();
   for (const wall of walls) {
     const b = wallBucket.get(wall)!;
@@ -239,9 +246,16 @@ export function buildFloorGeometry(
       t = Math.max(t, sp.s1);
     }
     pieces.push({ t0: t, t1: Infinity, ranges: [[-SLAB, H]] });
-    for (const piece of pieces) {
+    // under a sloped roof: slices along the wall where the roof is linear, each with its own top
+    const bends = slope.bends(wall, H);
+    for (const piece of bends ? pieces.flatMap((pc) => sliceAt(pc, bends)) : pieces) {
       const poly = clipAlong(wall.footprint, wall.a, ax, piece.t0, piece.t1);
       if (poly.length < 3) continue;
+      if (bends) {
+        const tops = slope.tops(poly, wall.a, ax, piece.t0, piece.t1, H);
+        for (const [y0, y1] of piece.ranges) pushSlopedRange(wallBuf, poly, y0, tops.map((t) => Math.min(y1, t)), y0 > 0.01, cut, b);
+        continue;
+      }
       for (const [y0, y1] of piece.ranges) {
         if (y1 - y0 < 1e-4) continue;
         const lintel = y0 > 0.01;
@@ -267,19 +281,34 @@ export function buildFloorGeometry(
     const b = wallBucket.get(e.wall)!;
     // base line along the floor: not across doorways
     for (const [p, q] of subtractSpans(e, spansOf(e.wall, (sp) => sp.sill <= 0.005))) lines.seg([p[0], 0.004, p[1]], [q[0], 0.004, q[1]], EDGE_BASE);
-    // cut line: not where an opening crosses the cut height
-    for (const [p, q] of subtractSpans(e, spansOf(e.wall, (sp) => sp.sill < cut && sp.top > cut))) lines.seg([p[0], cut, p[1]], [q[0], cut, q[1]], EDGE_CUT, CUT_OFFSET + b);
-    // top line: not where an opening reaches the top; a wall below the cut height keeps its top line
     const H = wallHeight(e.wall, floor.height);
-    for (const [p, q] of subtractSpans(e, spansOf(e.wall, (sp) => sp.top >= H - 0.021))) {
-      lines.seg([p[0], H, p[1]], [q[0], H, q[1]], EDGE_TOP, H <= cut + 1e-6 ? LOWER_OFFSET + b : b);
+    // pieces of the edge with the wall's top at both ends (sloped under a roof)
+    const topped = (parts: [Vec2, Vec2][]) => parts.flatMap(([p, q]) => slope.along(e.wall, p, q, H));
+    // cut line: not where an opening crosses the cut height, nor where a sloped roof comes down below it
+    for (const [p, q, yp, yq] of topped(subtractSpans(e, spansOf(e.wall, (sp) => sp.sill < cut && sp.top > cut)))) {
+      if (Math.min(yp, yq) > cut + 1e-6) lines.seg([p[0], cut, p[1]], [q[0], cut, q[1]], EDGE_CUT, CUT_OFFSET + b);
+    }
+    // top line: not where an opening reaches the top; a wall below the cut height keeps its top line
+    for (const [p, q, yp, yq] of topped(subtractSpans(e, spansOf(e.wall, (sp) => sp.top >= H - 0.021)))) {
+      lines.seg([p[0], yp, p[1]], [q[0], yq, q[1]], EDGE_TOP, Math.max(yp, yq) <= cut + 1e-6 ? LOWER_OFFSET + b : b);
     }
   }
   for (const c of outline.corners) {
-    const H = wallHeight(c.wall, floor.height);
+    const H = Math.min(wallHeight(c.wall, floor.height), slope.topAt(c.p));
+    if (H < 0.01) continue;
     lines.segSplit([c.p[0], 0.004, c.p[1]], [c.p[0], H, c.p[1]], EDGE_SOFT, Math.min(cut, H), wallBucket.get(c.wall)!);
   }
   for (const list of spans.values()) for (const sp of list) pushOpeningLines(lines, sp, cut);
+  // the sloped ceiling over the rooms, drawn by its rafters and purlins (folded away in the cut view)
+  if (ceiling) {
+    let interior = bucketIndex.get("interior");
+    if (interior === undefined) {
+      interior = buckets.length;
+      bucketIndex.set("interior", interior);
+      buckets.push(null);
+    }
+    pushCeilingLines(lines, floor, ceiling, interior);
+  }
 
   // ---------------------------------------------------------------- furniture and shadows
   const shadow = buildShadow(outline.edges, floor.rooms, spans);
@@ -307,6 +336,204 @@ export function buildFloorGeometry(
     walls2d: walls,
     wallBuckets: walls.map((w) => wallBucket.get(w)!),
     furnitureTris,
+    roofTop: slope.topAt,
+  };
+}
+
+/**
+ * The roof's underside where it is a sloped ceiling of this floor: its rafters and purlins, cut to the
+ * rooms and to the floor's height (above the floor, below where the floor's walls would end).
+ */
+function pushCeilingLines(lines: LineBuffer, floor: Floor, ceiling: RoofCeiling, bucket: number): void {
+  const rooms = floor.rooms.filter((r) => r.points.length >= 3);
+  if (!rooms.length) return;
+  const H = floor.height;
+  const local = (p: Vec2) => {
+    const c = ceiling.at(p[0], p[1]);
+    return c == null ? Infinity : c - floor.elevation;
+  };
+  const inRoom = (p: Vec2) => rooms.some((r) => pointInPolygon(p, r.points));
+  for (const [a, b] of ceiling.grid()) {
+    const lerp = (t: number): Vec2 => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
+    const ts = [0, 1, ...ceiling.breaks(a, b)];
+    for (const r of rooms) {
+      for (let i = 0; i < r.points.length; i++) {
+        const p = r.points[i];
+        const q = r.points[(i + 1) % r.points.length];
+        const dx = b[0] - a[0];
+        const dz = b[1] - a[1];
+        const ex = q[0] - p[0];
+        const ez = q[1] - p[1];
+        const den = dx * ez - dz * ex;
+        if (Math.abs(den) < 1e-9) continue;
+        const t = ((p[0] - a[0]) * ez - (p[1] - a[1]) * ex) / den;
+        const k = ((p[0] - a[0]) * dz - (p[1] - a[1]) * dx) / den;
+        if (k >= 0 && k <= 1) ts.push(t);
+      }
+    }
+    const cuts = [...new Set(ts.filter((t) => t >= 0 && t <= 1).map((t) => Math.round(t * 1e6) / 1e6))].sort((p, q) => p - q);
+    // within each piece the height is linear: also cut where it passes the floor or the wall tops
+    const pieces: [number, number][] = [];
+    for (let i = 0; i + 1 < cuts.length; i++) {
+      const t0 = cuts[i];
+      const t1 = cuts[i + 1];
+      if (t1 - t0 < 1e-6) continue;
+      const e = (t1 - t0) * 1e-3;
+      const y0 = local(lerp(t0 + e));
+      const y1 = local(lerp(t1 - e));
+      const ts2 = [t0];
+      if (Number.isFinite(y0) && Number.isFinite(y1)) for (const level of [0.02, H - 0.02]) if ((y0 - level) * (y1 - level) < 0) ts2.push(t0 + ((level - y0) / (y1 - y0)) * (t1 - t0));
+      ts2.push(t1);
+      ts2.sort((p, q) => p - q);
+      for (let j = 0; j + 1 < ts2.length; j++) pieces.push([ts2[j], ts2[j + 1]]);
+    }
+    for (const [t0, t1] of pieces) {
+      const mid = lerp((t0 + t1) / 2);
+      const ym = local(mid);
+      if (!(ym > 0.02 && ym < H - 0.02) || !inRoom(mid)) continue;
+      const e = (t1 - t0) * 1e-3;
+      const pa = lerp(t0);
+      const pb = lerp(t1);
+      lines.seg([pa[0], local(lerp(t0 + e)), pa[1]], [pb[0], local(lerp(t1 - e)), pb[1]], EDGE_SOFT, bucket);
+    }
+  }
+}
+
+/** Wall pieces between openings: from t0 to t1 along the axis, with the height ranges they fill. */
+interface Piece {
+  t0: number;
+  t1: number;
+  ranges: [number, number][];
+}
+
+/** A piece cut at the given positions along the axis. */
+function sliceAt(piece: Piece, at: number[]): Piece[] {
+  const inner = at.filter((s) => s > piece.t0 + 1e-6 && s < piece.t1 - 1e-6);
+  const ends = [piece.t0, ...inner, piece.t1];
+  return ends.slice(1).map((t1, i) => ({ t0: ends[i], t1, ranges: piece.ranges }));
+}
+
+/**
+ * A wall slice under a sloped roof: the height range from y0 up to its top at each corner. The slice
+ * lies either above or below the cut height (bends include the cut), so it folds like a straight wall.
+ */
+function pushSlopedRange(buf: GeoBuffer, poly: Vec2[], y0: number, tops: number[], lintel: boolean, cut: number, b: number): void {
+  const t = tops.map((y) => Math.max(y0, y));
+  if (Math.max(...t) - y0 < 1e-4) return;
+  const low = Math.min(...t);
+  if (y0 < cut - 1e-6) {
+    if (low >= cut - 1e-6) {
+      pushPrism(buf, poly, y0, cut, NEON.wall, NEON.wallTop, { aoFrom: 0, bottom: lintel, fold: LOWER_OFFSET + b, topFold: CAP_OFFSET + b });
+      if (Math.max(...t) > cut + 1e-6) pushSlopedPrism(buf, poly, cut, t, NEON.wall, NEON.wallTop, { aoFrom: 0, fold: b });
+    } else pushSlopedPrism(buf, poly, y0, t, NEON.wall, NEON.wallTop, { aoFrom: 0, bottom: lintel, fold: LOWER_OFFSET + b, topFold: LOWER_OFFSET + b });
+  } else pushSlopedPrism(buf, poly, y0, t, NEON.wall, NEON.wallTop, { aoFrom: 0, fold: b, bottom: lintel });
+}
+
+/** How a floor's walls end under a sloped roof (everything at full height when there is none). */
+interface Slope {
+  /** Roof underside above a plan point, in floor coordinates (Infinity where there is no roof). */
+  topAt(p: Vec2): number;
+  /** Positions along a wall (from wall.a) where its top bends, or null when the roof stays above it. */
+  bends(wall: Wall, H: number): number[] | null;
+  /** Top at each corner of a slice between t0 and t1 along the axis, at most H. */
+  tops(poly: Vec2[], origin: Vec2, ax: Vec2, t0: number, t1: number, H: number): number[];
+  /** Lowest roof underside over a stretch of a wall (Infinity without a roof). */
+  lowest(wall: Wall, s0: number, s1: number): number;
+  /** An edge along a wall cut where the top bends, with the top at both ends of each piece. */
+  along(wall: Wall, p: Vec2, q: Vec2, H: number): [Vec2, Vec2, number, number][];
+}
+
+function slopeOf(floor: Floor, ceiling: RoofCeiling | null, cut: number): Slope {
+  const topAt = (p: Vec2) => {
+    const c = ceiling?.at(p[0], p[1]);
+    return c == null ? Infinity : c - floor.elevation;
+  };
+  const axisOf = (wall: Wall) => unit([wall.b[0] - wall.a[0], wall.b[1] - wall.a[1]]);
+  const point = (wall: Wall, s: number): Vec2 => {
+    const ax = axisOf(wall);
+    return [wall.a[0] + ax[0] * s, wall.a[1] + ax[1] * s];
+  };
+  /** Where the roof bends along a wall's axis, as distances from wall.a over the footprint's length. */
+  const raw = (wall: Wall, from?: number, to?: number): number[] => {
+    if (!ceiling) return [];
+    const ax = axisOf(wall);
+    const len = Math.hypot(wall.b[0] - wall.a[0], wall.b[1] - wall.a[1]) || 1;
+    const along = wall.footprint.map((p) => (p[0] - wall.a[0]) * ax[0] + (p[1] - wall.a[1]) * ax[1]);
+    const lo = from ?? Math.min(...along);
+    const hi = to ?? Math.max(...along);
+    const inner = ceiling.breaks(wall.a, wall.b).map((t) => t * len).filter((s) => s > lo + 1e-6 && s < hi - 1e-6);
+    return [lo, ...inner, hi];
+  };
+  /** The roof inside an interval: its height just inside both ends (it is linear in between). */
+  const ends = (wall: Wall, s0: number, s1: number): [number, number] => {
+    const e = Math.min(1e-4, (s1 - s0) / 4);
+    return [topAt(point(wall, s0 + e)), topAt(point(wall, s1 - e))];
+  };
+  return {
+    topAt,
+    bends(wall, H) {
+      if (!ceiling) return null;
+      const ss = raw(wall);
+      const out = [...ss];
+      let touched = false;
+      for (let i = 0; i + 1 < ss.length; i++) {
+        const [g0, g1] = ends(wall, ss[i], ss[i + 1]);
+        if (Math.min(g0, g1) < H - 1e-6) touched = true;
+        if (!Number.isFinite(g0) || !Number.isFinite(g1)) continue;
+        // where the roof passes the wall's height or the cut height, the slice changes its kind
+        for (const level of [H, cut]) {
+          if ((g0 - level) * (g1 - level) < 0) out.push(ss[i] + ((level - g0) / (g1 - g0)) * (ss[i + 1] - ss[i]));
+        }
+      }
+      return touched ? out.sort((p, q) => p - q) : null;
+    },
+    tops(poly, origin, ax, t0, t1, H) {
+      // evaluated a hair inside the slice, so a corner on a section's edge takes the slice's side
+      const mid = (Math.max(t0, -1e9) + Math.min(t1, 1e9)) / 2;
+      return poly.map((p) => {
+        const t = (p[0] - origin[0]) * ax[0] + (p[1] - origin[1]) * ax[1];
+        const k = t < mid ? 1e-4 : -1e-4;
+        return Math.max(0, Math.min(H, topAt([p[0] + ax[0] * k, p[1] + ax[1] * k])));
+      });
+    },
+    lowest(wall, s0, s1) {
+      if (!ceiling) return Infinity;
+      const ss = raw(wall, s0, s1);
+      let low = Infinity;
+      for (let i = 0; i + 1 < ss.length; i++) low = Math.min(low, ...ends(wall, ss[i], ss[i + 1]));
+      return low;
+    },
+    along(wall, p, q, H) {
+      const top = (y: number) => Math.max(0, Math.min(H, y));
+      if (!ceiling) return [[p, q, H, H]];
+      const ax = axisOf(wall);
+      const sp = (p[0] - wall.a[0]) * ax[0] + (p[1] - wall.a[1]) * ax[1];
+      const sq = (q[0] - wall.a[0]) * ax[0] + (q[1] - wall.a[1]) * ax[1];
+      const lo = Math.min(sp, sq);
+      const hi = Math.max(sp, sq);
+      // an edge across the wall (its end) keeps one height: the roof at its middle
+      if (hi - lo < 1e-4) {
+        const y = top(topAt([(p[0] + q[0]) / 2, (p[1] + q[1]) / 2]));
+        return [[p, q, y, y]];
+      }
+      const cuts = this.bends(wall, H) ?? [];
+      const ss = [lo, ...cuts.filter((s) => s > lo + 1e-6 && s < hi - 1e-6), hi];
+      const at = (s: number): Vec2 => {
+        const k = (s - sp) / (sq - sp);
+        return [p[0] + (q[0] - p[0]) * k, p[1] + (q[1] - p[1]) * k];
+      };
+      const out: [Vec2, Vec2, number, number][] = [];
+      for (let i = 0; i + 1 < ss.length; i++) {
+        const a = at(ss[i]);
+        const c = at(ss[i + 1]);
+        const e = Math.min(1e-4, (ss[i + 1] - ss[i]) / 4);
+        const ya = top(topAt(at(ss[i] + e)));
+        const yc = top(topAt(at(ss[i + 1] - e)));
+        // keep the edge's direction
+        out.push(sp <= sq ? [a, c, ya, yc] : [c, a, yc, ya]);
+      }
+      return sp <= sq ? out : out.reverse();
+    },
   };
 }
 

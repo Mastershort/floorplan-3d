@@ -29,6 +29,14 @@ export function sectionFrame(s: Pick<RoofSection, "x0" | "z0" | "x1" | "z1" | "a
     : { u0: z0, u1: z1, w: x1 - x0, at: (u, v) => [s.flip ? x1 - v : x0 + v, u] };
 }
 
+/** A plan point in a section's frame: u along its ridge, v across from side a (the inverse of `at`). */
+export function sectionUV(s: RoofSection, p: Vec2): [number, number] {
+  const fr = sectionFrame(s);
+  const o = fr.at(0, 0);
+  const e = fr.at(0, 1);
+  return s.axis === "x" ? [p[0], (p[1] - o[1]) * (e[1] - o[1])] : [p[1], (p[0] - o[0]) * (e[0] - o[0])];
+}
+
 /** Height profile across a section: the ridge position and height, and the roof height at any v. */
 export interface SectionProfile {
   /** Ridge across (0 … w); a pent roof has its high edge at w. */
@@ -158,4 +166,268 @@ export function roofSectionsFromRooms(b: Building, makeId: (i: number) => string
     above.push(...rooms);
   }
   return out;
+}
+
+/** Height above the floor marked in the plan under a sloped roof (beyond it there is less headroom). */
+export const HEADROOM = 1.5;
+
+/** Thickness of a closed roof: its underside is this far below the profile. */
+export const ROOF_THICK = 0.14;
+
+/**
+ * Underside of the roof sections over the plan: the sloped ceiling of an attic, down to the ground for
+ * an A-frame. Walls under it end at it. Canopies (open sections) leave the house alone.
+ */
+export interface RoofCeiling {
+  /** Height of the underside above the ground at a plan point; null where no section covers it. */
+  at(x: number, z: number): number | null;
+  /**
+   * Where the ceiling may bend along the line through `a` and `b`: parameters t (a + (b - a) t) where
+   * the line crosses a section's edge, its ridge or a hip. Between two of them the ceiling is linear.
+   */
+  breaks(a: Vec2, b: Vec2): number[];
+  /** Lines over the underside to draw it by (rafters down the slopes, purlins along them), as plan segments. */
+  grid(): [Vec2, Vec2][];
+  /** Where the underside is `level` high (above the ground), as plan segments. */
+  contour(level: number): [Vec2, Vec2][];
+}
+
+interface CeilingSection {
+  x0: number;
+  z0: number;
+  x1: number;
+  z1: number;
+  /** Underside height at a point inside the rectangle. */
+  y(x: number, z: number): number;
+  /** Lines (as point pairs) along which the underside bends. */
+  lines: [Vec2, Vec2][];
+  /** Rafters and purlins in the plan. */
+  grid: [Vec2, Vec2][];
+  /** Where the underside is at a height, as plan segments. */
+  contour(level: number): [Vec2, Vec2][];
+}
+
+/** Parameter t on the line a→b where it crosses the infinite line p→q (null when parallel). */
+function crossing(a: Vec2, b: Vec2, p: Vec2, q: Vec2): number | null {
+  const dx = b[0] - a[0];
+  const dz = b[1] - a[1];
+  const ex = q[0] - p[0];
+  const ez = q[1] - p[1];
+  const den = dx * ez - dz * ex;
+  if (Math.abs(den) < 1e-9) return null;
+  return ((p[0] - a[0]) * ez - (p[1] - a[1]) * ex) / den;
+}
+
+function ceilingSection(s: RoofSection): CeilingSection {
+  const fr = sectionFrame(s);
+  const pr = sectionProfile(s);
+  // plan point -> (u, v) of the section
+  const uv = (x: number, z: number): [number, number] => {
+    const o = fr.at(0, 0);
+    const e = fr.at(0, 1);
+    const across = s.axis === "x" ? (z - o[1]) * (e[1] - o[1]) : (x - o[0]) * (e[0] - o[0]);
+    return [s.axis === "x" ? x : z, across];
+  };
+  const lines: [Vec2, Vec2][] = [];
+  const u0 = fr.u0;
+  const u1 = fr.u1;
+  const w = fr.w;
+  if (s.shape !== "flat" && s.shape !== "pent") lines.push([fr.at(u0, pr.vr), fr.at(u1, pr.vr)]);
+  // a hip roof also slopes down towards both ends: up from the eave over the run d to the ridge
+  const d = s.shape === "hip" ? Math.min((u1 - u0) / 2, Math.min(pr.vr, w - pr.vr) || w / 2) : 0;
+  if (d > 0) {
+    lines.push([fr.at(u0 + d, 0), fr.at(u0 + d, w)], [fr.at(u1 - d, 0), fr.at(u1 - d, w)]);
+    lines.push([fr.at(u0, 0), fr.at(u0 + d, pr.vr)], [fr.at(u0, w), fr.at(u0 + d, pr.vr)], [fr.at(u1, 0), fr.at(u1 - d, pr.vr)], [fr.at(u1, w), fr.at(u1 - d, pr.vr)]);
+  }
+  const eave = Math.min(pr.y(0), pr.y(w));
+  // rafters about every 1.2 m down the slopes (bent at the ridge), purlins about every 0.8 m along them
+  const grid: [Vec2, Vec2][] = [];
+  if (s.shape !== "flat") {
+    const nu = Math.max(1, Math.round((u1 - u0) / 1.2));
+    for (let i = 1; i < nu; i++) {
+      const u = u0 + ((u1 - u0) * i) / nu;
+      if (s.shape === "pent") grid.push([fr.at(u, 0), fr.at(u, w)]);
+      else grid.push([fr.at(u, 0), fr.at(u, pr.vr)], [fr.at(u, pr.vr), fr.at(u, w)]);
+    }
+    const nv = Math.max(1, Math.round(w / 0.8));
+    for (let i = 1; i < nv; i++) grid.push([fr.at(u0, (w * i) / nv), fr.at(u1, (w * i) / nv)]);
+    if (s.shape !== "pent") grid.push([fr.at(u0, pr.vr), fr.at(u1, pr.vr)]);
+  }
+  const ta = Math.tan(Math.min(80, Math.max(0, s.pitch_a)) * DEG);
+  const tb = Math.tan(Math.min(80, Math.max(0, s.pitch_b)) * DEG);
+  const contour = (level: number): [Vec2, Vec2][] => {
+    if (s.shape === "flat") return [];
+    const y = level + ROOF_THICK;
+    const vs: number[] = [];
+    if (ta > 1e-6) {
+      const v = (y - s.eave_a) / ta;
+      if (v > 0 && v < (s.shape === "pent" ? w : pr.vr)) vs.push(v);
+    }
+    if (s.shape !== "pent" && tb > 1e-6) {
+      const v = w - (y - s.eave_b) / tb;
+      if (v > pr.vr && v < w) vs.push(v);
+    }
+    // on a hip roof the line also turns round both ends
+    const du = d > 0 && pr.rh > eave ? Math.max(0, Math.min(d, ((y - eave) * d) / (pr.rh - eave))) : 0;
+    const out: [Vec2, Vec2][] = vs.map((v) => [fr.at(u0 + du, v), fr.at(u1 - du, v)]);
+    if (du > 0 && vs.length === 2) out.push([fr.at(u0 + du, vs[0]), fr.at(u0 + du, vs[1])], [fr.at(u1 - du, vs[0]), fr.at(u1 - du, vs[1])]);
+    return out;
+  };
+  return {
+    contour,
+    grid,
+    x0: Math.min(s.x0, s.x1),
+    z0: Math.min(s.z0, s.z1),
+    x1: Math.max(s.x0, s.x1),
+    z1: Math.max(s.z0, s.z1),
+    y: (x, z) => {
+      const [u, v] = uv(x, z);
+      let y = pr.y(v);
+      if (d > 0) y = Math.min(y, eave + ((pr.rh - eave) * Math.min(u - u0, u1 - u)) / d);
+      return y - ROOF_THICK;
+    },
+    lines,
+  };
+}
+
+/** The ceiling of a building's roof sections (none for a single roof: it sits on the top floor's walls). */
+export function roofCeiling(b: Building): RoofCeiling | null {
+  const roof = b.settings.roof;
+  if (roof?.type !== "custom") return null;
+  const secs = (roof.sections ?? []).filter((s) => !s.open && Math.abs(s.x1 - s.x0) >= 0.1 && Math.abs(s.z1 - s.z0) >= 0.1).map(ceilingSection);
+  if (!secs.length) return null;
+  const E = 1e-6;
+  return {
+    at(x, z) {
+      // where sections overlap, the lower roof runs under the higher one: the higher one is the ceiling
+      let best: number | null = null;
+      for (const s of secs) {
+        if (x < s.x0 - E || x > s.x1 + E || z < s.z0 - E || z > s.z1 + E) continue;
+        const y = s.y(x, z);
+        if (best === null || y > best) best = y;
+      }
+      return best;
+    },
+    breaks(a, bb) {
+      const out: number[] = [];
+      for (const s of secs) {
+        const edges: [Vec2, Vec2][] = [
+          [[s.x0, s.z0], [s.x1, s.z0]],
+          [[s.x0, s.z1], [s.x1, s.z1]],
+          [[s.x0, s.z0], [s.x0, s.z1]],
+          [[s.x1, s.z0], [s.x1, s.z1]],
+        ];
+        for (const [p, q] of [...edges, ...s.lines]) {
+          const t = crossing(a, bb, p, q);
+          if (t !== null) out.push(t);
+        }
+      }
+      return out.sort((p, q) => p - q);
+    },
+    grid: () => secs.flatMap((s) => s.grid),
+    contour: (level) => secs.flatMap((s) => s.contour(level)),
+  };
+}
+
+/** Parts of the segment a→b that lie inside any of the rooms. */
+export function insideRooms(a: Vec2, b: Vec2, rooms: readonly Room[]): [Vec2, Vec2][] {
+  const ts = [0, 1];
+  for (const r of rooms) {
+    for (let i = 0; i < r.points.length; i++) {
+      const t = crossing(a, b, r.points[i], r.points[(i + 1) % r.points.length]);
+      const k = t === null ? null : crossing(r.points[i], r.points[(i + 1) % r.points.length], a, b);
+      if (t !== null && k !== null && k >= 0 && k <= 1 && t > 0 && t < 1) ts.push(t);
+    }
+  }
+  ts.sort((p, q) => p - q);
+  const at = (t: number): Vec2 => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
+  const out: [Vec2, Vec2][] = [];
+  for (let i = 0; i + 1 < ts.length; i++) {
+    if (ts[i + 1] - ts[i] < 1e-6) continue;
+    const mid = at((ts[i] + ts[i + 1]) / 2);
+    if (rooms.some((r) => r.points.length >= 3 && pointInPolygon(mid, r.points))) out.push([at(ts[i]), at(ts[i + 1])]);
+  }
+  return out;
+}
+
+/** Height of the top of the closed, non-dormer sections at a plan point (the slope a dormer sits on); null where none is. */
+export function hostTop(sections: readonly RoofSection[], p: Vec2, except?: RoofSection): number | null {
+  let best: number | null = null;
+  for (const s of sections) {
+    if (s === except || s.dormer || s.open || s.shape === "flat") continue;
+    const fr = sectionFrame(s);
+    const [u, v] = sectionUV(s, p);
+    if (u < fr.u0 - 1e-6 || u > fr.u1 + 1e-6 || v < -1e-6 || v > fr.w + 1e-6) continue;
+    const y = sectionProfile(s).y(v);
+    if (best === null || y > best) best = y;
+  }
+  return best;
+}
+
+/**
+ * A dormer for a tap on a section's slope: 2 m wide, its front flush with that slope's eave (the
+ * facade), a gable roof of 30° whose eaves stand 1.5 m above the slope's eave, as deep as its ridge
+ * needs to run into the slope. Null off the slopes.
+ */
+export function dormerFor(host: RoofSection, p: Vec2, id: string): RoofSection | null {
+  if (host.shape === "flat") return null;
+  const fr = sectionFrame(host);
+  const pr = sectionProfile(host);
+  const [pu, pv] = sectionUV(host, p);
+  if (pu < fr.u0 || pu > fr.u1 || pv < 0 || pv > fr.w) return null;
+  const a = host.shape === "pent" || pv <= pr.vr;
+  const eave = a ? host.eave_a : host.eave_b;
+  const tanH = Math.tan(Math.min(80, Math.max(5, a ? host.pitch_a : host.pitch_b)) * DEG);
+  const W = Math.min(2, fr.u1 - fr.u0);
+  const de = Math.min(1.5, (pr.rh - eave) * 0.6);
+  const rh = eave + de + (W / 2) * Math.tan(30 * DEG);
+  // deep enough for its ridge to meet the slope, at most to the host's ridge
+  const D = Math.min((rh - eave) / tanH + 0.1, a ? pr.vr : fr.w - pr.vr);
+  const u0 = Math.max(fr.u0, Math.min(fr.u1 - W, pu - W / 2));
+  const [v0, v1] = a ? [0, D] : [fr.w - D, fr.w];
+  const c = [fr.at(u0, v0), fr.at(u0 + W, v1)];
+  const r = (x: number) => Math.round(x * 100) / 100;
+  const y = r(eave + de);
+  return {
+    id,
+    x0: r(Math.min(c[0][0], c[1][0])),
+    z0: r(Math.min(c[0][1], c[1][1])),
+    x1: r(Math.max(c[0][0], c[1][0])),
+    z1: r(Math.max(c[0][1], c[1][1])),
+    shape: "gable",
+    axis: host.axis === "x" ? "z" : "x",
+    eave_a: y,
+    eave_b: y,
+    pitch_a: 30,
+    pitch_b: 30,
+    base: y,
+    overhang: 0.15,
+    dormer: true,
+  };
+}
+
+/**
+ * Where a dormer's roof stands above the slope it sits on (the opening it needs in that slope), as a
+ * plan polygon: its front edge, then back along the lines where its slopes run into the host's.
+ */
+export function dormerHole(host: RoofSection, d: RoofSection): Vec2[] | null {
+  if (d.shape === "flat" || host.shape === "flat") return null;
+  const fr = sectionFrame(d);
+  const pr = sectionProfile(d);
+  const hp = sectionProfile(host);
+  const hostY = (u: number, v: number) => hp.y(sectionUV(host, fr.at(u, v))[1]);
+  // the front is the end where the host slope is lower
+  const front = hostY(fr.u0, fr.w / 2) <= hostY(fr.u1, fr.w / 2) ? fr.u0 : fr.u1;
+  const back = front === fr.u0 ? fr.u1 : fr.u0;
+  const vs = d.shape === "pent" ? [0, fr.w] : [0, pr.vr, fr.w];
+  const meet = (v: number) => {
+    // the host's height runs linearly from front to back: where it reaches the dormer's
+    const y = pr.y(v);
+    const yf = hostY(front, v);
+    const yb = hostY(back, v);
+    if (yf >= y) return front;
+    if (yb <= y) return back;
+    return front + ((y - yf) / (yb - yf)) * (back - front);
+  };
+  return [fr.at(front, 0), ...vs.map((v) => fr.at(meet(v), v)), fr.at(front, fr.w)];
 }

@@ -47,7 +47,15 @@ const FACE_GAP = 0.012;
  * Builds the light surface of a floor: a grid of `cell` metres on every room floor and strips on the
  * room side of every wall face, split at the cut height and left out where doors and windows are.
  */
-export function buildLightSurface(floor: Floor, walls: Wall[], wallBuckets: number[], openings: OpeningInfo[], cell: number, holes: Vec2[][] = []): LightSurface {
+export function buildLightSurface(
+  floor: Floor,
+  walls: Wall[],
+  wallBuckets: number[],
+  openings: OpeningInfo[],
+  cell: number,
+  holes: Vec2[][] = [],
+  roofTop: (p: Vec2) => number = () => Infinity,
+): LightSurface {
   const pos: number[] = [];
   const normal: number[] = [];
   const room: number[] = [];
@@ -135,7 +143,10 @@ export function buildLightSurface(floor: Floor, walls: Wall[], wallBuckets: numb
         const sm = (s0 + s1) / 2;
         for (let h = 0; h < rows.length - 1; h++) {
           const y0 = rows[h];
-          const y1 = rows[h + 1];
+          // under a sloped roof the wall (and its light) ends lower
+          const pa = at(s0, 0);
+          const pb = at(s1, 0);
+          const y1 = Math.min(rows[h + 1], Math.min(roofTop([pa[0], pa[2]]), roofTop([pb[0], pb[2]])) - 0.02);
           if (y1 - y0 < 0.01) continue;
           const ym = (y0 + y1) / 2;
           if (gaps.some((g) => sm > g.s0 && sm < g.s1 && ym > g.y0 && ym < g.y1)) continue;

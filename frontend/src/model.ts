@@ -230,6 +230,8 @@ export interface RoofSection {
   /** Fixed: cannot be moved or resized by accident (the plan lock fixes every section too). */
   locked?: boolean;
   /** A canopy (terrace roof, carport): posts and beams instead of walls, a see-through roof. */
+  /** A dormer on a larger section: its cheeks are built down to that section's slope. */
+  dormer?: boolean;
   open?: boolean;
 }
 
@@ -300,15 +302,19 @@ export interface SolarField {
  */
 export interface RoofWindow {
   id: string;
+  /** Its name (null = "Roof window 1" …). */
+  name?: string | null;
   face: string;
   u: number;
   v: number;
   /** Size in metres (null = 0.78 × 1.18, a common size). */
   w?: number | null;
   h?: number | null;
+  /** Blind, contact and tilt contact; the sash motor (a cover whose position opens it, Velux, Roto). null = automatic from the room under it, "none" = none. */
   cover?: EntityRef;
   contact?: EntityRef;
   tilt?: EntityRef;
+  window?: EntityRef;
   /** Fixed: cannot be moved by accident. */
   locked?: boolean;
 }

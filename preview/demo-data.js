@@ -450,3 +450,58 @@ export const DEMO_PACK = {
     },
   ],
 };
+
+// ?attic: the upper floor as an attic under a gable roof (knee walls of 1 m, 45° slopes)
+export function demoAttic() {
+  const b = structuredClone(DEMO_BUILDING);
+  const og = b.floors.find((f) => f.id === "og");
+  og.name = "Dachgeschoss";
+  const knee = og.elevation + 1.0;
+  // the dormer's front window in the guest room's outer wall
+  og.openings = [
+    ...og.openings,
+    { id: "o_dormer", room_id: "gast", edge: 2, offset: 3.5, width: 1.2, type: "window", sill: 0.9, height: 1.3, hinge: "left", leaves: 2, swing: "in", cover: null, contact: null, contact2: null, tilt: null },
+  ];
+  b.settings.roof = {
+    type: "custom",
+    pitch: 45,
+    overhang: 0.4,
+    sections: [
+      { id: "r_main", x0: -0.24, z0: -0.24, x1: 10.24, z1: 8.24, shape: "gable", axis: "x", eave_a: knee, eave_b: knee, pitch_a: 45, pitch_b: 45, base: knee, overhang: null },
+      { id: "r_garage", x0: 9.76, z0: -0.24, x1: 13.84, z1: 5.44, shape: "pent", axis: "z", flip: true, eave_a: 2.75, eave_b: 2.75, pitch_a: 12, pitch_b: 12, base: 2.75, overhang: null },
+      // a dormer over the guest room, its front flush with the facade (a window sits in the wall below)
+      { id: "r_dormer", x0: 5.5, z0: 6.06, x1: 7.5, z1: 8.24, shape: "gable", axis: "z", eave_a: 5.25, eave_b: 5.25, pitch_a: 30, pitch_b: 30, base: 5.25, overhang: 0.15, dormer: true },
+    ],
+    // a roof window on the main roof's other slope, with its blind
+    windows: [{ id: "rw_gast", name: "Gästezimmer", face: "r_main:b", u: 3.2, v: 1.2, w: 0.94, h: 1.4, cover: "none", contact: null, tilt: null, window: "none" }],
+  };
+  return b;
+}
+
+// ?aframe: an A-frame house, the roof down to the ground, with a gallery floor under the ridge
+export function demoAFrame() {
+  const r = (id, name, x0, z0, x1, z1, mat = "oak") => ({ id, name, area_id: null, points: [[x0, z0], [x1, z0], [x1, z1], [x0, z1]], floor_material: mat });
+  const fl = (id, name, elevation, height, rooms) => ({ id, name, elevation, height, cut_height: 1.15, rooms, openings: [], furniture: [], placements: [], background: null });
+  const ground = fl("af_eg", "Erdgeschoss", 0, 2.6, [r("af_wohnen", "Wohnen", 0, 0, 7, 6), r("af_bad", "Bad", 7, 0, 9, 3, "tiles"), r("af_flur", "Flur", 7, 3, 9, 6)]);
+  ground.openings = [
+    { id: "af_d", room_id: "af_flur", edge: 1, offset: 1.5, width: 1.0, type: "door", sill: 0, height: 2.1, hinge: "left", leaves: 1, swing: "in", cover: null, contact: null, contact2: null, tilt: null },
+    { id: "af_w", room_id: "af_wohnen", edge: 3, offset: 3, width: 2.4, type: "window", sill: 0, height: 4.2, hinge: "left", leaves: 2, swing: "in", cover: null, contact: null, contact2: null, tilt: null },
+  ];
+  const gallery = fl("af_og", "Galerie", 2.8, 2.6, [r("af_schlafen", "Schlafen", 3, 1.6, 9, 4.4, "carpet")]);
+  return {
+    version: 1,
+    settings: {
+      wall_exterior: 0.24,
+      wall_interior: 0.12,
+      grid: 0.05,
+      north: 0,
+      roof: {
+        type: "custom",
+        pitch: 60,
+        overhang: 0.4,
+        sections: [{ id: "af_roof", x0: -0.24, z0: -0.24, x1: 9.24, z1: 6.24, shape: "gable", axis: "x", eave_a: 0, eave_b: 0, pitch_a: 60, pitch_b: 60, base: 0, overhang: null }],
+      },
+    },
+    floors: [ground, gallery],
+  };
+}

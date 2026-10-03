@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { BufferGeometry } from "three";
 import type { Floor, Furniture, Opening, Room } from "../model.ts";
-import { newFloor } from "../model.ts";
+import { emptyBuilding, newFloor, type RoofSection } from "../model.ts";
+import { roofCeiling } from "../roof-sections.ts";
 import { buildFloorGeometry, clipAlong, stairHoles } from "./build.ts";
 
 const EXT = 0.24;
@@ -144,4 +145,58 @@ test("a stairwell opening cuts a hole into its own floor; stairs below reaching 
   const solid = area(buildFloorGeometry(upper, EXT, INT).floor);
   const cut = area(buildFloorGeometry(upper, EXT, INT, holes).floor);
   assert.ok(solid - cut > 4.4 && solid - cut < 4.6, `${solid - cut}`);
+});
+
+/** A gable roof section over the rectangle 0..6 x 0..4 at the outer wall faces, ridge along x. */
+function ceilingOf(patch: Partial<RoofSection>) {
+  const b = emptyBuilding();
+  const sec: RoofSection = { id: "r", x0: -EXT, z0: -EXT, x1: 6 + EXT, z1: 4 + EXT, shape: "gable", axis: "x", eave_a: 1, eave_b: 1, pitch_a: 45, pitch_b: 45, base: 1, overhang: null, ...patch };
+  b.settings = { ...b.settings, roof: { type: "custom", pitch: 45, overhang: 0.4, sections: [sec] } };
+  return roofCeiling(b)!;
+}
+
+function heights(g: BufferGeometry): number[] {
+  const p = g.getAttribute("position");
+  return Array.from({ length: p.count }, (_, i) => p.getY(i));
+}
+
+test("walls under a sloped roof end at its underside: knee walls low, the gables up to the ridge", () => {
+  const floor = { ...floorWith([rect("a", 0, 0, 6, 4)]), height: 2.5 };
+  const ceiling = ceilingOf({});
+  const flat = buildFloorGeometry(floor, EXT, INT);
+  const sloped = buildFloorGeometry(floor, EXT, INT, [], [], ceiling);
+  near(Math.max(...heights(flat.walls)), 2.5);
+  // every wall vertex stays under the roof (a hair of tolerance at the slices' edges)
+  const p = sloped.walls.getAttribute("position");
+  for (let i = 0; i < p.count; i++) {
+    const roof = ceiling.at(p.getX(i), p.getZ(i));
+    if (roof !== null) assert.ok(p.getY(i) <= roof + 0.01, `vertex at ${p.getX(i)},${p.getY(i)},${p.getZ(i)} above the roof ${roof}`);
+  }
+  // the long walls are knee walls (about a metre), the gable walls still reach the floor's height
+  const ys = heights(sloped.walls);
+  near(Math.max(...ys), 2.5);
+  // (the eave wall has no slices of its own: the roof is the same all along it)
+  const knee = Array.from({ length: p.count }, (_, i) => i).filter((i) => Math.abs(p.getZ(i) + EXT / 2) < EXT / 2 + 1e-6);
+  assert.ok(knee.length > 0 && Math.max(...knee.map((i) => p.getY(i))) < 1.2, "the eave wall is a knee wall");
+  // the top edge follows the slope: lines rise above the knee walls and stay under the roof
+  for (const s of segments(sloped.lines)) {
+    for (const [x, y, z] of [[s[0], s[1], s[2]], [s[3], s[4], s[5]]]) {
+      const roof = ceiling.at(x, z);
+      if (roof !== null) assert.ok(y <= roof + 0.01, `line point ${x},${y},${z} above the roof`);
+    }
+  }
+});
+
+test("an opening under a sloped roof ends below it, and walls reach no higher where the roof comes down to the floor", () => {
+  const room = rect("a", 0, 0, 6, 4);
+  const win: Opening = { ...opening("window", "a", 1, 2, 1.2), sill: 0.3, height: 2.1 };
+  const floor = { ...floorWith([room], [win]), height: 3 };
+  const geo = buildFloorGeometry(floor, EXT, INT, [], [], ceilingOf({ eave_a: 0, eave_b: 0, pitch_a: 60, pitch_b: 60, base: 0 }));
+  const info = geo.openings[0];
+  // on the gable wall (x = 6) the window spans z 1.4 … 2.6: the roof is lowest at z = 1.4
+  const roof = (1.4 + EXT) * Math.tan((60 * Math.PI) / 180) - 0.14;
+  assert.ok(info.top <= roof - 0.02 + 1e-6 && info.top <= 2.4 + 1e-6);
+  // at the eaves (z = 0 and z = 4) the walls are only as high as the roof there
+  const p = geo.walls.getAttribute("position");
+  for (let i = 0; i < p.count; i++) if (p.getZ(i) < -0.1 && p.getX(i) > 1 && p.getX(i) < 5) assert.ok(p.getY(i) < 0.3);
 });

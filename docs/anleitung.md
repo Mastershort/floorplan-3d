@@ -363,6 +363,15 @@ Ein einfaches Haus bekommt unter **Einstellungen → Dach** ein Flach- oder Satt
 
 Unter den Dachflächen legt **+ Dachfenster** ein Fenster in eine Dachfläche (Standard 78 × 118 cm). Es lässt sich im Grundriss verschieben, auch auf eine andere Dachfläche, und hat wie ein normales Fenster **Rollladen**, **Kontakt** und **Kippkontakt**: Offen klappt der Flügel oben angeschlagen nach außen, gekippt ein Stück, und der Rollladen fährt von oben über die Scheibe.
 
+Zusätzlich hat jedes Dachfenster einen **Namen** und einen **Fenstermotor**: Ein Motor wie bei Velux oder Roto (eine `cover`-Entität der Klasse *window*) öffnet den Flügel so weit, wie seine Position angibt. Steht ein Feld auf **Automatisch**, nimmt das Fenster Motor, Kontakt und Rollladen aus dem Bereich des Raums darunter; **Keiner** lässt es weg. Neue Dachfenster stehen auf Automatisch, ältere ohne Eintrag bleiben ohne. Die gelben Ecken des gewählten Fensters im Grundriss ziehen ändert seine Größe, die gegenüberliegende Ecke bleibt stehen. Liegt das Fenster in einem Dachabschnitt, schneidet es ein Loch in die Schräge, sodass man aus dem Dachgeschoss hinaussieht.
+
+#### Gauben
+
+Hauptdachabschnitt wählen, **+ Gaube** drücken und in die Dachfläche tippen, wo sie hin soll. NeonPlan 3D legt einen kleinen Dachabschnitt mit dem Schalter **Gaube** an: 2 m breit, vorne bündig mit der Traufe dieser Dachfläche (der Fassade), ein Satteldach mit 30°, dessen Traufen bis 1,5 m über der Haupttraufe stehen, und so tief, wie sein First braucht, um in die Hauptdachfläche zu laufen. Seine Wangen reichen bis auf die Hauptdachfläche, und die öffnet sich unter ihm. Anpassen lässt er sich wie jeder Abschnitt.
+
+- Unter der Gaube ist ihr Dach die Decke, die Außenwand des Dachgeschosses steigt dort bis zu ihr: Das Gaubenfenster setzt du mit **Tür & Fenster** in diese Wand, wie jedes Fenster. Räume darunter bekommen die zusätzliche Kopfhöhe.
+- Ist der Schalter **Gaube** aus, ist es wieder ein normaler Abschnitt.
+
 ### 4.20 Energie: Solarfelder
 
 Im Werkzeug **Energie** lassen sich nur Solarfelder und Energiegeräte verschieben, im Grundriss wie in 3D; Räume und Möbel sind dort gesperrt, ein Hinweis oben im Grundriss sagt das. Das Werkzeug sammelt alles rund um Energie im Haus, zuerst die **Solarfelder** (Zähler, Heizung und Wärmepumpe folgen). **+ Solarfeld** legt ein Feld auf die sonnigste freie Dachfläche, so groß, wie es passt. **+ Frei aufgeständert** stellt ein Feld auf Gestellen neben das Haus, etwa in den Garten oder auf ein flaches Garagendach. **+ An der Wand** hängt eine Reihe Module an die sonnigste Außenwand der angezeigten Etage (Fassade, Balkon).
