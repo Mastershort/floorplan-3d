@@ -5,7 +5,6 @@ import { css, html, LitElement, nothing } from "lit";
 import { fetchBuilding } from "./api.ts";
 import { CARD_CONTROLS, type CardConfig, type CardControl } from "./card-config.ts";
 import { translate, type I18nKey } from "./i18n.ts";
-import { SHOW_ENERGY } from "./flags.ts";
 import type { HomeAssistant } from "./types.ts";
 
 /** Defaults of the card: options at their default are left out of the config. */
@@ -261,8 +260,7 @@ export class Floorplan3dCardEditor extends LitElement {
       <div class="grid">
         ${this.select("markers", "markers", [["none", "markers_none"], ["important", "markers_important"], ["all", "markers_all"]], v.markers)}
         ${this.select("heatmap", "heatmap", [["none", "heat_off"], ["temperature", "heat_temperature"], ["humidity", "heat_humidity"], ["co2", "heat_co2"]], v.heatmap)}
-        ${SHOW_ENERGY
-          ? html`<label class="field wide"
+        <label class="field wide"
           >${this.t("flows")}
           <select @change=${(e: Event) => {
             const c = (e.target as HTMLSelectElement).value;
@@ -272,12 +270,11 @@ export class Floorplan3dCardEditor extends LitElement {
             <option value="on" ?selected=${flows === "on"}>${this.t("card_flows_on")}</option>
             <option value="off" ?selected=${flows === "off"}>${this.t("card_flows_off")}</option>
           </select>
-        </label>`
-          : nothing}
+        </label>
       </div>
       ${this.renderControls()}
       ${this.renderThumbsToggle()} ${this.toggle("room_names", "card_room_names")}
-      ${SHOW_ENERGY ? this.toggle("energy", "card_energy") : nothing} ${this.toggle("room_panel", "card_room_panel", "card_room_panel_hint")}
+      ${this.toggle("energy", "card_energy")} ${this.toggle("room_panel", "card_room_panel", "card_room_panel_hint")}
       ${this.toggle("fullscreen_button", "card_fullscreen_button", "card_fullscreen_button_hint")}
       ${this.toggle("explode", "card_explode")} ${this.toggle("stats", "card_stats", "card_stats_hint")}
       ${this.renderFeatures()}

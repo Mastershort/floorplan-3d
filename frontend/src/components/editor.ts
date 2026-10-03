@@ -9,8 +9,9 @@ import { closeGaps, suggestedThickness } from "../geometry/gaps.ts";
 import { keepInRoom, snapToWall } from "../geometry/snap.ts";
 import { holeInRoom } from "../geometry/holes.ts";
 import { weatherEntity } from "../weather.ts";
-import { SHOW_ENERGY, SHOW_PRESENCE } from "../flags.ts";
+import { SHOW_PRESENCE } from "../flags.ts";
 import { hasFeature, manualUrl, shopUrl } from "../features.ts";
+import { deviceSensors, proposeEnergySensors, type EnergyPrefs } from "../energy.ts";
 import { isStatusSensor, robotRoomSensor, TOGGLE_KINDS } from "../devices.ts";
 import { ridgeHeight, roofSectionsFromRooms, sectionFrame, sectionProfile, wallTopUnder } from "../roof-sections.ts";
 import { bestFace, clampField, faceAt, faceCompass, fieldFace, fieldModules, GROUND, pointOnFace, proposeField, proposeGroundField, proposeWindow, proposeWallField, roofFaces, rowCounts, turnGroundField, fieldCenter, wallFaces, windowAsField, windowCorners, onFace, onField, rayOnFace, type RoofFace } from "../solar.ts";
@@ -92,7 +93,7 @@ import { furnitureSize, isElectric, mountBase, packItem, packItemName, packType,
 /** Items that can be fixed against moving. */
 type FixKind = "room" | "opening" | "furniture" | "device" | "wall" | "outdoor";
 
-type Tool = "select" | "rect" | "polygon" | "measure" | "opening" | "furniture" | "outdoor" | "hole" | "wall" | "meter" | "roof" | "energy";
+type Tool = "select" | "rect" | "polygon" | "measure" | "opening" | "furniture" | "outdoor" | "hole" | "wall" | "roof" | "energy";
 
 type Drag =
   | { kind: "pan"; last: [number, number] }
@@ -158,6 +159,7 @@ export class Fp3dEditor extends LitElement {
     _solarId: { state: true },
     _solarPick: { state: true },
     _roofWinId: { state: true },
+    _energyNote: { state: true },
     _furnQuery: { state: true },
     _libOpen: { state: true },
     _expanded: { state: true },
@@ -224,6 +226,8 @@ export class Fp3dEditor extends LitElement {
   private declare _solarPick: boolean;
   /** Selected roof window (roof tool). */
   private declare _roofWinId: string | null;
+  /** What the import from the energy dashboard did (shown under its button). */
+  private declare _energyNote: string | null;
   /** Furniture library: the search text, and which sections are open (built-in groups and packs). */
   private declare _furnQuery: string;
   private declare _libOpen: Set<string>;
@@ -293,6 +297,7 @@ export class Fp3dEditor extends LitElement {
     this._solarId = null;
     this._solarPick = false;
     this._roofWinId = null;
+    this._energyNote = null;
     this._furnQuery = "";
     this._libOpen = new Set(["group:lights", "group:living"]);
     try {
@@ -1032,15 +1037,6 @@ export class Fp3dEditor extends LitElement {
     }
     if (this._tool === "opening") {
       if (!this.placeOpening(this._openingPreset, local)) this.drag = { kind: "pan", last: local };
-      return;
-    }
-    if (this._tool === "meter") {
-      if (this.isAdmin && this._floorId) {
-        const g = this._doc.settings.grid;
-        const [x, z] = world.map((v) => round(Math.round(v / g) * g));
-        this.setEnergy({ meter: { floor_id: this._floorId, x, z } });
-      }
-      this._tool = "select";
       return;
     }
     const deviceEl = target.closest("[data-device]");
@@ -2726,7 +2722,7 @@ export class Fp3dEditor extends LitElement {
     if (device)
       return html`<button class="fp3d-btn fp3d-back" @click=${() => this.selectItem("furniture", null)}>‹ ${this.t("tool_energy")}</button>
         ${this.renderFurnitureForm(device)}`;
-    return html`${this.renderSolarList()}${this.renderEnergyDevices()}${this.renderSolarProTeaser()}`;
+    return html`${this.renderSolarList()}${this.renderEnergyDevices()}${this.renderEnergyBalance()}${this.renderSolarProTeaser()}`;
   }
 
   /** The coming Pro add-on: a picture and what it will do. */
@@ -2758,7 +2754,8 @@ export class Fp3dEditor extends LitElement {
     const parked = rooms.find((r) => floor.furniture.some((m) => m.type === "parking" && pointInPolygon([m.x, m.z], r.points)));
     const garage = find(/garage|carport/) ?? parked;
     const utility = find(/hwr|hauswirt|technik|keller|abstell|utility|basement|boiler|heiz/);
-    const room = (type === "wallbox" ? garage : (utility ?? garage)) ?? this.room ?? rooms.sort((a, b) => Math.abs(signedArea(b.points)) - Math.abs(signedArea(a.points)))[0];
+    const hall = find(/flur|diele|eingang|hall|entr|lobby/);
+    const room = (type === "wallbox" ? garage : type === "meter" ? (utility ?? hall ?? garage) : (utility ?? garage)) ?? this.room ?? rooms.sort((a, b) => Math.abs(signedArea(b.points)) - Math.abs(signedArea(a.points)))[0];
     const [w, d, h] = furnitureSize(type);
     let [x, z] = room ? centroid(room.points) : this.toWorld(this._size.w / 2, this._size.h / 2);
     if (room) {
@@ -4146,7 +4143,6 @@ export class Fp3dEditor extends LitElement {
             : floor
               ? this.renderRoomList(floor)
               : nothing}
-      ${admin && SHOW_ENERGY ? this.renderEnergySettings() : nothing}
       ${admin && SHOW_PRESENCE ? this.renderPresenceSettings() : nothing}
       ${floor && admin ? this.renderBackgroundForm(floor) : nothing} ${admin ? this.renderSettings() : nothing}
       ${admin ? this.renderBackup() : nothing}
@@ -4574,44 +4570,62 @@ export class Fp3dEditor extends LitElement {
     this.setDoc(next);
   }
 
-  private renderEnergySettings() {
+  /** Fill the balance from Home Assistant's energy dashboard: its statistics lead to power sensors of the same devices. */
+  private async importEnergyPrefs(): Promise<void> {
+    if (!this.hass) return;
+    let prefs: EnergyPrefs;
+    try {
+      prefs = await this.hass.callWS<EnergyPrefs>({ type: "energy/get_prefs" });
+    } catch {
+      this._energyNote = this.t("energy_import_failed");
+      return;
+    }
+    const found = proposeEnergySensors(this.hass, prefs);
+    // only empty fields are filled: what the user chose stays
     const e = this._doc.energy;
+    const patch = Object.fromEntries(Object.entries(found).filter(([k]) => e[k as keyof typeof e] == null));
+    const n = Object.keys(patch).length;
+    if (n) this.setEnergy(patch);
+    this._energyNote = n ? this.t("energy_import_done", { n }) : this.t("energy_import_none");
+  }
+
+  /** Grid, solar, battery and house sensors: from the devices in the plan unless chosen here. */
+  private renderEnergyBalance() {
+    const e = this._doc.energy;
+    const admin = this.isAdmin;
     const attr = (id: string, key: string) => this.hass?.states[id]?.attributes[key] as string | undefined;
     const power = this.entityOptions((id) => id.startsWith("sensor.") && attr(id, "device_class") === "power");
     const soc = this.entityOptions((id) => id.startsWith("sensor.") && attr(id, "device_class") === "battery");
     const tariff = this.entityOptions(
       (id) => id.startsWith("sensor.") && (attr(id, "device_class") === "monetary" || /\/(kWh|MWh)$/.test(attr(id, "unit_of_measurement") ?? "")),
     );
-    const pick = (key: "grid" | "solar" | "battery" | "battery_soc" | "tariff") => (v: string | null) => this.setEnergy({ [key]: v === "none" ? null : v });
-    const floorName = e.meter ? this._doc.floors.find((f) => f.id === e.meter!.floor_id)?.name : null;
-    return html`<details class="fp3d-section">
-      <summary>${this.t("energy")}</summary>
+    const pick = (key: "grid" | "solar" | "battery" | "battery_soc" | "consumption" | "tariff") => (v: string | null) => this.setEnergy({ [key]: v === "none" ? null : v });
+    const devices = deviceSensors(this._doc);
+    return html`<section>
+      <h3>⚖ ${this.t("energy_balance")}</h3>
+      <p class="fp3d-sub">${this.t("energy_balance_hint")}</p>
       <div class="fp3d-form">
-        <div class="fp3d-actions fp3d-wide">
-          <button class="fp3d-btn ${this._tool === "meter" ? "fp3d-primary" : ""}" ?disabled=${!this.floor} @click=${() => (this._tool = "meter")}>
-            ${this.t("energy_meter_set")}
-          </button>
-          ${e.meter ? html`<button class="fp3d-btn fp3d-danger" @click=${() => this.setEnergy({ meter: null })}>${this.t("energy_meter_remove")}</button>` : nothing}
-        </div>
-        <p class="fp3d-sub fp3d-wide">
-          ${e.meter ? `${this.t("energy_meter")}: ${floorName ?? ""} · ${formatNumber(this.hass, e.meter.x, 2)} / ${formatNumber(this.hass, e.meter.z, 2)} m` : this.t("energy_meter_hint")}
-        </p>
-        ${this.entitySelect(this.t("energy_grid"), e.grid, undefined, power, pick("grid"))}
+        ${this.entitySelect(this.t("energy_grid"), e.grid, devices.grid, power, pick("grid"))}
         <label class="fp3d-check fp3d-wide"
-          ><input type="checkbox" .checked=${e.grid_invert} @change=${(ev: Event) => this.setEnergy({ grid_invert: (ev.target as HTMLInputElement).checked })} />
+          ><input type="checkbox" .checked=${e.grid_invert} ?disabled=${!admin} @change=${(ev: Event) => this.setEnergy({ grid_invert: (ev.target as HTMLInputElement).checked })} />
           ${this.t("energy_invert")}</label
         >
-        ${this.entitySelect(this.t("energy_solar_sensor"), e.solar, undefined, power, pick("solar"))}
-        ${this.entitySelect(this.t("energy_battery_sensor"), e.battery, undefined, power, pick("battery"))}
+        ${this.entitySelect(this.t("energy_solar_sensor"), e.solar, devices.solar[0] ?? null, power, pick("solar"))}
+        ${this.entitySelect(this.t("energy_battery_sensor"), e.battery, devices.battery, power, pick("battery"))}
         <label class="fp3d-check fp3d-wide"
-          ><input type="checkbox" .checked=${e.battery_invert} @change=${(ev: Event) => this.setEnergy({ battery_invert: (ev.target as HTMLInputElement).checked })} />
+          ><input type="checkbox" .checked=${e.battery_invert} ?disabled=${!admin} @change=${(ev: Event) => this.setEnergy({ battery_invert: (ev.target as HTMLInputElement).checked })} />
           ${this.t("energy_invert")}</label
         >
-        ${this.entitySelect(this.t("energy_battery_soc"), e.battery_soc, undefined, soc, pick("battery_soc"))}
+        ${this.entitySelect(this.t("energy_battery_soc"), e.battery_soc, devices.soc, soc, pick("battery_soc"))}
+        ${this.entitySelect(this.t("energy_consumption_sensor"), e.consumption, null, power, pick("consumption"))}
         ${this.entitySelect(this.t("energy_tariff_sensor"), e.tariff, undefined, tariff, pick("tariff"))}
       </div>
+      <div class="fp3d-actions">
+        <button class="fp3d-btn" ?disabled=${!admin || !this.hass} @click=${() => this.importEnergyPrefs()}>${this.t("energy_import_prefs")}</button>
+      </div>
+      ${this._energyNote ? html`<p class="fp3d-sub">${this._energyNote}</p>` : nothing}
       <p class="fp3d-sub">${this.t("energy_hint")}</p>
-    </details>`;
+    </section>`;
   }
 
   private renderPresenceSettings() {
@@ -4681,7 +4695,15 @@ export class Fp3dEditor extends LitElement {
         ${this.entitySelect(this.t(lamp ? "furn_entity_light" : media ? "furn_entity_tv" : f.type === "radiator" ? "furn_entity_climate" : f.type === "robot_vacuum" ? "furn_entity_vacuum" : "furn_entity"), f.entity ?? null, autoPick("entity"), entities, (v) =>
           this.updateFurniture({ entity: v }),
         )}
-        ${lamp ? nothing : this.entitySelect(this.t("furn_power"), f.power ?? null, autoPick("power"), power, (v) => this.updateFurniture({ power: v }))}
+        ${lamp
+          ? nothing
+          : this.entitySelect(
+              this.t(f.type === "meter" ? "energy_grid" : f.type === "inverter" ? "energy_solar_sensor" : f.type === "home_battery" ? "energy_battery_sensor" : "furn_power"),
+              f.power ?? null,
+              autoPick("power"),
+              power,
+              (v) => this.updateFurniture({ power: v }),
+            )}
       </div>
       ${f.type === "home_battery"
         ? html`<div class="fp3d-form fp3d-links">

@@ -717,6 +717,19 @@ function wallbox(b: Builder, w: number, d: number, h: number): void {
   b.box(-0.06, 0.06, y0 - 0.42, y0 - 0.35, d / 2 - 0.05, d / 2, C.dark, C.body);
 }
 
+/** Meter cabinet on the wall (from 0.4 m): a tall box with the meter window and the glowing pulse LED. */
+function meterCabinet(b: Builder, w: number, d: number, h: number): void {
+  const y0 = 0.4;
+  b.box(-w / 2, w / 2, y0, y0 + h, -d / 2, d / 2, C.white, C.whiteTop, EDGE_FURN);
+  // the door's edge and handle
+  b.seg(-w / 2 + 0.025, y0 + 0.025, d / 2 + 0.003, -w / 2 + 0.025, y0 + h - 0.025, d / 2 + 0.003, EDGE_FAINT);
+  b.seg(-w / 2 + 0.025, y0 + h - 0.025, d / 2 + 0.003, w / 2 - 0.025, y0 + h - 0.025, d / 2 + 0.003, EDGE_FAINT);
+  b.box(w / 2 - 0.06, w / 2 - 0.035, y0 + h * 0.5 - 0.05, y0 + h * 0.5 + 0.05, d / 2, d / 2 + 0.012, C.dark);
+  // the meter behind its window with the display line
+  b.box(-w * 0.3, w * 0.3, y0 + h * 0.6, y0 + h * 0.8, d / 2, d / 2 + 0.005, C.dark);
+  b.seg(-w * 0.22, y0 + h * 0.7, d / 2 + 0.008, w * 0.22, y0 + h * 0.7, d / 2 + 0.008, EDGE_GLOW);
+}
+
 /** Home battery on the floor: stacked modules with a charge bar on the front. */
 function homeBattery(b: Builder, w: number, d: number, h: number): void {
   b.box(-w / 2 + 0.02, w / 2 - 0.02, 0, 0.06, -d / 2 + 0.02, d / 2 - 0.02, C.dark);
@@ -977,6 +990,9 @@ function buildFurniture(buf: GeoBuffer, lines: LineBuffer, shadow: GeoBuffer, f:
       return;
     case "wallbox":
       wallbox(b, w, d, h);
+      return;
+    case "meter":
+      meterCabinet(b, w, d, h);
       return;
     case "home_battery":
       homeBattery(b, w, d, h);

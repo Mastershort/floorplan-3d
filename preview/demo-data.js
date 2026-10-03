@@ -261,14 +261,16 @@ DEMO_BUILDING.floors[0].placements.push(
   place("sensor.akku_leistung", 7.3, 8.8),
 );
 DEMO_BUILDING.floors[1].placements = [place("light.kinderzimmer", 2.9, 2.8), place("light.schreibtisch", 6.2, 1.2), place("sensor.pc_leistung", 9.0, 0.9)];
+// grid, solar and battery come from the devices in the garage (meter, inverter, home battery)
 DEMO_BUILDING.energy = {
-  meter: { floor_id: "eg", x: 9.75, z: 5.0 },
-  grid: "sensor.netz_leistung",
+  meter: null,
+  grid: null,
   grid_invert: false,
-  solar: "sensor.pv_leistung",
-  battery: "sensor.akku_leistung",
+  solar: null,
+  battery: null,
   battery_invert: false,
-  battery_soc: "sensor.akku_ladestand",
+  battery_soc: null,
+  consumption: null,
   tariff: "sensor.strompreis",
 };
 DEMO_BUILDING.presence = [
@@ -414,8 +416,9 @@ DEMO_BUILDING.floors[0].outdoor = [
   area("a8", "bed", 1.5, 10.2, 5.5, 11.2),
   area("a9", "fence", -4, -9, 19, 14.5),
 ];
-// solar inverter, home battery and wallbox on the back wall of the garage
+// meter, solar inverter, home battery and wallbox on the back wall of the garage
 DEMO_BUILDING.floors[0].furniture.push(
+  { ...item("meter", 13.75, 0.11, 0.55, 0.21, 1.1), power: "sensor.netz_leistung" },
   { ...item("inverter", 13.0, 0.11, 0.5, 0.2, 0.65), power: "sensor.pv_leistung" },
   { ...item("home_battery", 12.3, 0.14, 0.6, 0.25, 1.1), power: "sensor.akku_leistung", soc: "sensor.akku_ladestand" },
   item("wallbox", 10.6, 0.09, 0.3, 0.15, 0.42),

@@ -4,10 +4,10 @@
  */
 import { getPacks } from "./packs.ts";
 
-export type Feature = "camera_cockpit" | "weather" | "screens" | "fridge_smart";
+export type Feature = "camera_cockpit" | "weather" | "screens" | "energy_pro" | "fridge_smart";
 
 /** The add-ons shown on the extensions page (sold in the shop). */
-export const FEATURES: readonly Feature[] = ["camera_cockpit", "weather", "screens"];
+export const FEATURES: readonly Feature[] = ["camera_cockpit", "weather", "screens", "energy_pro"];
 /** Features unlocked by a pack but not listed anywhere (exclusive items). */
 const HIDDEN: readonly Feature[] = ["fridge_smart"];
 
@@ -26,6 +26,7 @@ const MANUAL_FEATURE: Record<string, { de: string; en: string }> = {
   camera_cockpit: { de: "pro-erweiterungen/#61-kamera-cockpit", en: "pro-add-ons/#61-camera-cockpit" },
   weather: { de: "pro-erweiterungen/#62-wetter-drau%C3%9Fen", en: "pro-add-ons/#62-weather-outside" },
   screens: { de: "pro-erweiterungen/#63-bildschirme-live", en: "pro-add-ons/#63-live-screens" },
+  energy_pro: { de: "pro-erweiterungen/#64-energie-pro", en: "pro-add-ons/#64-energy-pro" },
   extensions: { de: "erweiterungen-shop-moebel-packs/", en: "extensions-shop-furniture-packs/" },
 };
 

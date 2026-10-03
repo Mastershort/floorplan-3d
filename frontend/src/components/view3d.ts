@@ -23,7 +23,7 @@ import {
 } from "../devices.ts";
 import { alertColor, alertEntities, alertSources, alertText, findAlerts, type Alert, type AlertSources } from "../alerts.ts";
 import { iconPath, iconSvg } from "../icons.ts";
-import { energySummary, findConsumers, flowColor, flowSegments, powerSensorFor, readPower, type Consumer, type EnergySummary } from "../energy.ts";
+import { deviceSensors, energySummary, findConsumers, flowColor, flowSegments, powerSensorFor, readPower, type Consumer, type EnergySummary } from "../energy.ts";
 import { STAGE, type Theme } from "../themes.ts";
 import { HEAT_SCALES, heatColor, heatGradient, roomValues, type HeatMode } from "../heatmap.ts";
 import { furnitureName } from "../furniture-names.ts";
@@ -33,7 +33,7 @@ import { getPacks, mountBase, packItem, packsVersion } from "../packs.ts";
 import { parkedVehicles, parkingEntities } from "../parking.ts";
 import { TRAIL_ICON, TRAIL_WINDOW_MS, trailEvents, trailPoints, trailSources, trailTime, type HistoryRow } from "../trail.ts";
 import { limitEffects, weatherEntity, weatherState } from "../weather.ts";
-import { SHOW_ENERGY, SHOW_PRESENCE } from "../flags.ts";
+import { SHOW_PRESENCE } from "../flags.ts";
 import { hasFeature, manualUrl, shopUrl, type Feature } from "../features.ts";
 import { searchIndex, searchItems, type SearchItem } from "../search.ts";
 import { coverPositionable, lightAbilities } from "./quick-menu.ts";
@@ -451,7 +451,7 @@ export class Fp3dView3d extends LitElement {
       const parking = parkingEntities(b.floors);
       const motion = trailSources(hass, b).map((s) => s.entity);
       const weather = weatherEntity(hass, this.weatherEntityId ?? b.settings.weather_entity);
-      const all = [...placed, ...cameraSensors, ...links, ...power, ...furniture, ...doors, ...robotRooms, ...roofWindowIds, ...pictureRules, e.grid, e.solar, e.battery, e.battery_soc, e.tariff, ...presence, ...lights, ...heat, ...warn, ...parking, ...motion, weather, "sun.sun"];
+      const all = [...placed, ...cameraSensors, ...links, ...power, ...furniture, ...doors, ...robotRooms, ...roofWindowIds, ...pictureRules, e.grid, e.solar, e.battery, e.battery_soc, e.consumption, e.tariff, ...presence, ...lights, ...heat, ...warn, ...parking, ...motion, weather, "sun.sun"];
       this.watched = [...new Set(all.filter((id): id is string => !!id))];
       force = true;
     }
@@ -463,7 +463,7 @@ export class Fp3dView3d extends LitElement {
     const deviceMarkers = buildMarkers(hass, b);
     const furniture = this.furnitureMarkers(hass, b, new Set(deviceMarkers.map((m) => m.id)), new Set(consumers.map((c) => c.powerEntity)));
     consumers.push(...furniture.consumers);
-    const summary = energySummary(hass, b, consumers);
+    const summary = energySummary(hass, b, consumers, deviceSensors(b, (f) => this.furnitureLinks?.get(f.id)?.power ?? null));
     // a placed power sensor shows its value as state text already, so only devices get a watt badge
     const byDevice = new Map(consumers.filter((c) => c.id !== c.powerEntity).map((c) => [c.id, c.power]));
     this.confirmSet = confirmEntities(hass, b.floors);
@@ -518,9 +518,12 @@ export class Fp3dView3d extends LitElement {
       this.thumbSig = lampSig;
       if (!first) this.scheduleThumbs(1500);
     }
-    const batteryPlaced = b.energy.battery ? b.floors.flatMap((f) => f.placements.filter((p) => p.entity_id === b.energy.battery).map((p) => ({ floorId: f.id, x: p.x, z: p.z })))[0] : null;
+    // the battery cable ends at the home battery in the plan (older plans: at the placed battery sensor)
+    const batteryPlaced =
+      b.floors.flatMap((f) => f.furniture.filter((m) => m.type === "home_battery").map((m) => ({ floorId: f.id, x: m.x, z: m.z })))[0] ??
+      (b.energy.battery ? b.floors.flatMap((f) => f.placements.filter((p) => p.entity_id === b.energy.battery).map((p) => ({ floorId: f.id, x: p.x, z: p.z })))[0] : null);
     v.setFlows(
-      !SHOW_ENERGY || !(this.flows ?? this._flows) || this.dimmed
+      !hasFeature("energy_pro") || !(this.flows ?? this._flows) || this.dimmed
         ? []
         : flowSegments({ building: b, consumers, summary, battery: batteryPlaced ?? null }).map((f) => ({
         floorId: f.floorId,
@@ -677,7 +680,9 @@ export class Fp3dView3d extends LitElement {
         const id = (f.type === "home_battery" ? (extra ?? link.entity ?? link.power) : (link.entity ?? link.power ?? extra))!;
         targets.set(f.id, id);
         const st = link.entity ? hass.states[link.entity] : undefined;
-        const power = link.power ? readPower(hass.states[link.power]) : null;
+        // the meter's sensor is the grid (+ = import), the battery's can point the other way as well
+        const invert = f.type === "meter" ? b.energy.grid_invert : f.type === "home_battery" ? b.energy.battery_invert : false;
+        const power = link.power ? readPower(hass.states[link.power], invert) : null;
         if (link.power && power !== null && !consumerSensors.has(link.power)) {
           consumerSensors.add(link.power);
           consumers.push({ id, powerEntity: link.power, floorId: floor.id, x: f.x, z: f.z, power: Math.max(0, power) });
@@ -715,14 +720,25 @@ export class Fp3dView3d extends LitElement {
           y: markerHeight(f) + mountBase(floor, f),
           icon: iconSvg(kind ?? "switch"),
           name: link.entity ? entityName(hass, link.entity) : furnitureName(hass, f.type),
-          text: f.type === "home_battery" ? this.batteryText(hass, extra, power) : f.type === "wallbox" ? this.wallboxText(hass, extra, power) : st ? stateText(hass, st) : power !== null ? formatPower(hass, Math.max(0, power)) : "",
+          text:
+            f.type === "home_battery"
+              ? this.batteryText(hass, extra, power)
+              : f.type === "wallbox"
+                ? this.wallboxText(hass, extra, power)
+                : f.type === "meter"
+                  ? this.meterText(hass, power)
+                  : st
+                    ? stateText(hass, st)
+                    : power !== null
+                      ? formatPower(hass, Math.max(0, power))
+                      : "",
           active: st ? isActive(st) : (power ?? 0) > 5,
           unavailable: st ? isUnavailable(st) : false,
           glow: null,
           // its pin grabs the item when furnishing
           furnitureId: f.id,
           // inverter, battery, wallbox: their own text (watts, charge, status) is always worth a pin
-          energyDevice: f.type === "inverter" || f.type === "home_battery" || f.type === "wallbox",
+          energyDevice: f.type === "inverter" || f.type === "home_battery" || f.type === "wallbox" || f.type === "meter",
           show: f.marker ?? undefined,
           fromFurniture: true,
         });
@@ -884,6 +900,13 @@ export class Fp3dView3d extends LitElement {
   }
 
   /** Wallbox: "lädt · 11 kW", "angesteckt" or its power, from a status sensor (on/off or a state such as charging). */
+  /** The meter: what the house draws from the grid, or feeds into it. */
+  private meterText(hass: HomeAssistant, power: number | null): string {
+    if (power === null) return "";
+    if (Math.abs(power) < 5) return formatPower(hass, 0);
+    return `${translate(hass, power < 0 ? "energy_grid_export" : "energy_grid_import")} ${formatPower(hass, Math.abs(power))}`;
+  }
+
   private wallboxText(hass: HomeAssistant, status: string | null, power: number | null): string {
     const st = status ? hass.states[status] : undefined;
     const raw = String(st?.state ?? "").toLowerCase();
@@ -1300,7 +1323,7 @@ export class Fp3dView3d extends LitElement {
 
   private renderEnergy() {
     const e = this._energy;
-    if (!SHOW_ENERGY || !e || this.roomId || !this.showEnergy) return nothing;
+    if (!hasFeature("energy_pro") || !e || this.roomId || !this.showEnergy) return nothing;
     const t = (k: Parameters<typeof translate>[1]) => translate(this.hass, k);
     const items: { cls: string; label: string; value: string }[] = [];
     if (e.consumption !== null) items.push({ cls: "total", label: t("energy_consumption"), value: formatPower(this.hass, e.consumption) });

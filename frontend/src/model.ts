@@ -396,6 +396,8 @@ export interface EnergySettings {
   battery: string | null;
   battery_invert: boolean;
   battery_soc: string | null;
+  /** House consumption (W); null = from the balance of grid, solar and battery. */
+  consumption: string | null;
   tariff: string | null;
 }
 
@@ -421,6 +423,7 @@ export const DEFAULT_ENERGY: EnergySettings = {
   battery: null,
   battery_invert: false,
   battery_soc: null,
+  consumption: null,
   tariff: null,
 };
 
@@ -558,6 +561,7 @@ export const FURNITURE_TYPES = [
   "inverter",
   "home_battery",
   "wallbox",
+  "meter",
   "parking",
   "fridge_smart",
   "stairwell",
@@ -576,7 +580,7 @@ export const FURNITURE_GROUPS: Record<string, FurnitureType[]> = {
 };
 
 /** Energy devices: placed and set up in the Energy tool (stored like furniture, not in the library). */
-export const ENERGY_DEVICES = ["inverter", "home_battery", "wallbox"] as const;
+export const ENERGY_DEVICES = ["meter", "inverter", "home_battery", "wallbox"] as const;
 
 /** Furniture that can show a linked entity (TV state, power, …). */
 /** Lamps: drawn live (they glow with their light) and tapped directly in 3D. */
@@ -670,6 +674,8 @@ export function builtinBase(f: Pick<Furniture, "type" | "h">): number {
       return 1.1;
     case "wallbox":
       return 1.0;
+    case "meter":
+      return 0.4;
     default:
       return 0;
   }
@@ -691,6 +697,7 @@ export const ELECTRIC_FURNITURE = new Set<string>([
   "inverter",
   "home_battery",
   "wallbox",
+  "meter",
   "tv_board",
   "tv_wall",
   "desk",
@@ -725,6 +732,8 @@ export const FURNITURE_SIZE: Record<FurnitureType, [number, number, number]> = {
   inverter: [0.5, 0.2, 0.65],
   home_battery: [0.6, 0.25, 1.1],
   wallbox: [0.3, 0.15, 0.42],
+  // the meter cabinet hangs on the wall as well
+  meter: [0.55, 0.21, 1.1],
   fridge: [0.6, 0.65, 1.8],
   fridge_smart: [0.91, 0.73, 1.78],
   stairwell: [1.0, 2.6, 0.02],

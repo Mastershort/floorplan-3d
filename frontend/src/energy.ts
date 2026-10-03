@@ -7,7 +7,7 @@
 // consumers behind a cable is added up, so trunk lines carry more than branches.
 
 import { generateWalls } from "./geometry/walls.ts";
-import type { Building, Floor, Room, Vec2 } from "./model.ts";
+import type { Building, EnergySettings, Floor, Furniture, Room, Vec2 } from "./model.ts";
 import { powerSensorsOf } from "./devices.ts";
 import { pointInPolygon, signedArea } from "./model.ts";
 import type { HassEntity, HomeAssistant } from "./types.ts";
@@ -49,6 +49,90 @@ export interface Consumer {
 }
 
 const CABLE_Y = 0.03;
+
+/** Power sensors the placed energy devices bring along (meter = grid, inverters = solar, battery). */
+export interface DeviceSensors {
+  grid: string | null;
+  solar: string[];
+  battery: string | null;
+  soc: string | null;
+}
+
+const ref = (v: string | null | undefined) => (v && v !== "none" ? v : null);
+
+/**
+ * The sensors of the energy devices in the plan: `power` tells the power sensor of an item (its own field, or
+ * the one found on its device). Several inverters add up.
+ */
+export function deviceSensors(building: Building, power: (f: Furniture) => string | null = (f) => ref(f.power)): DeviceSensors {
+  const out: DeviceSensors = { grid: null, solar: [], battery: null, soc: null };
+  for (const floor of building.floors) {
+    for (const f of floor.furniture) {
+      const p = power(f);
+      if (f.type === "meter") out.grid ??= p;
+      else if (f.type === "inverter" && p && !out.solar.includes(p)) out.solar.push(p);
+      else if (f.type === "home_battery") {
+        out.battery ??= p;
+        out.soc ??= ref(f.soc);
+      }
+    }
+  }
+  return out;
+}
+
+/** Where the cables meet: the meter cabinet in the plan, else the meter spot set in older plans. */
+export function meterPosition(building: Building): { floor_id: string; x: number; z: number } | null {
+  for (const floor of building.floors) {
+    const m = floor.furniture.find((f) => f.type === "meter");
+    if (m) return { floor_id: floor.id, x: m.x, z: m.z };
+  }
+  return building.energy.meter;
+}
+
+/** Home Assistant's energy dashboard settings (`energy/get_prefs`), as far as the proposals need them. */
+export interface EnergyPrefs {
+  energy_sources?: {
+    type: string;
+    stat_energy_from?: string;
+    stat_energy_to?: string;
+    flow_from?: { stat_energy_from: string }[];
+    flow_to?: { stat_energy_to: string }[];
+  }[];
+}
+
+/** The power sensor (W) that belongs to an energy statistic: one of the same device, named like it if there are several. */
+function powerOfDevice(hass: HomeAssistant, statId: string | undefined, deviceClass = "power"): string | null {
+  if (!statId) return null;
+  const device = hass.entities?.[statId]?.device_id;
+  if (!device) return null;
+  const candidates = Object.keys(hass.states).filter((id) => id.startsWith("sensor.") && hass.entities?.[id]?.device_id === device && hass.states[id]?.attributes.device_class === deviceClass);
+  if (candidates.length <= 1) return candidates[0] ?? null;
+  // a total over several phases rather than a single phase or a daily value
+  const total = candidates.filter((id) => !/(phase|_l[123]\b|_[abc]$|today|daily|heute)/.test(id));
+  const stem = statId.replace(/^sensor\./, "").replace(/_?(energy|energie|total|today|daily|kwh|import|export|consumption|production)/g, "");
+  return total.find((id) => stem && id.includes(stem)) ?? total[0] ?? candidates[0];
+}
+
+/** Sensors for the energy balance proposed from the energy dashboard: grid, solar, battery and its charge. */
+export function proposeEnergySensors(hass: HomeAssistant, prefs: EnergyPrefs): Partial<EnergySettings> {
+  const out: Partial<EnergySettings> = {};
+  for (const src of prefs.energy_sources ?? []) {
+    if (src.type === "grid") {
+      const stat = src.flow_from?.[0]?.stat_energy_from ?? src.flow_to?.[0]?.stat_energy_to;
+      const p = powerOfDevice(hass, stat);
+      if (p && !out.grid) out.grid = p;
+    } else if (src.type === "solar") {
+      const p = powerOfDevice(hass, src.stat_energy_from);
+      if (p && !out.solar) out.solar = p;
+    } else if (src.type === "battery") {
+      const p = powerOfDevice(hass, src.stat_energy_from ?? src.stat_energy_to);
+      if (p && !out.battery) out.battery = p;
+      const soc = powerOfDevice(hass, src.stat_energy_from ?? src.stat_energy_to, "battery");
+      if (soc && !out.battery_soc) out.battery_soc = soc;
+    }
+  }
+  return out;
+}
 /** Distance of the cable ring from the wall face. */
 const RING_GAP = 0.07;
 
@@ -93,16 +177,25 @@ export function findConsumers(hass: HomeAssistant, building: Building): Consumer
   return out;
 }
 
-export function energySummary(hass: HomeAssistant, building: Building, consumers: Consumer[]): EnergySummary {
+export function energySummary(hass: HomeAssistant, building: Building, consumers: Consumer[], devices: DeviceSensors = deviceSensors(building)): EnergySummary {
   const e = building.energy;
-  const grid = e.grid ? readPower(hass.states[e.grid], e.grid_invert) : null;
-  const solar = e.solar ? readPower(hass.states[e.solar]) : null;
-  const battery = e.battery ? readPower(hass.states[e.battery], e.battery_invert) : null;
-  const socState = e.battery_soc ? Number(hass.states[e.battery_soc]?.state) : NaN;
+  // the balance sensors win; without them the placed devices bring theirs (the meter, the inverters, the battery)
+  const gridId = e.grid ?? devices.grid;
+  const grid = gridId ? readPower(hass.states[gridId], e.grid_invert) : null;
+  let solar: number | null = e.solar ? readPower(hass.states[e.solar]) : null;
+  if (!e.solar && devices.solar.length) {
+    const values = devices.solar.map((id) => readPower(hass.states[id])).filter((v): v is number => v !== null);
+    solar = values.length ? values.reduce((a, b) => a + b, 0) : null;
+  }
+  const batteryId = e.battery ?? devices.battery;
+  const battery = batteryId ? readPower(hass.states[batteryId], e.battery_invert) : null;
+  const socId = e.battery_soc ?? devices.soc;
+  const socState = socId ? Number(hass.states[socId]?.state) : NaN;
   const tariffState = e.tariff ? hass.states[e.tariff] : undefined;
   const tariffValue = Number(tariffState?.state);
-  let consumption: number | null = null;
-  if (grid !== null || solar !== null || battery !== null) consumption = Math.max(0, (grid ?? 0) + Math.max(0, solar ?? 0) + (battery ?? 0));
+  let consumption: number | null = e.consumption ? readPower(hass.states[e.consumption]) : null;
+  if (consumption !== null) consumption = Math.max(0, consumption);
+  else if (grid !== null || solar !== null || battery !== null) consumption = Math.max(0, (grid ?? 0) + Math.max(0, solar ?? 0) + (battery ?? 0));
   else if (consumers.length) consumption = consumers.reduce((s, c) => s + c.power, 0);
   return {
     grid,
@@ -281,7 +374,7 @@ interface Target {
 const planCache = new WeakMap<Building, Map<string, PlannedSegment[]>>();
 
 function planRoutes(building: Building, targets: Target[]): PlannedSegment[] {
-  const meter = building.energy.meter!;
+  const meter = meterPosition(building)!;
   const meterFloor = building.floors.find((f) => f.id === meter.floor_id)!;
   const out: PlannedSegment[] = [];
   const { wall_exterior: ext, wall_interior: int } = building.settings;
@@ -350,7 +443,7 @@ function planRoutes(building: Building, targets: Target[]): PlannedSegment[] {
 
 /** All cable segments: consumers (tree from the meter), grid feed, solar riser and battery cable. */
 export function flowSegments({ building, consumers, summary, battery }: FlowInput): FlowSegment[] {
-  const meter = building.energy.meter;
+  const meter = meterPosition(building);
   if (!meter) return [];
   const meterFloor = building.floors.find((f) => f.id === meter.floor_id);
   if (!meterFloor) return [];

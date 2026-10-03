@@ -378,6 +378,7 @@ ENERGY_DEFAULTS = {
     "battery": None,
     "battery_invert": False,
     "battery_soc": None,
+    "consumption": None,
     "tariff": None,
 }
 
@@ -391,6 +392,7 @@ ENERGY_SCHEMA = vol.Schema(
         vol.Optional("battery", default=None): _ENTITY,
         vol.Optional("battery_invert", default=False): bool,
         vol.Optional("battery_soc", default=None): _ENTITY,
+        vol.Optional("consumption", default=None): _ENTITY,
         vol.Optional("tariff", default=None): _ENTITY,
     },
     extra=vol.ALLOW_EXTRA,

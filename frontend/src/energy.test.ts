@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { energySummary, findConsumers, flowColor, flowSegments, powerSensorFor, readPower } from "./energy.ts";
+import { deviceSensors, energySummary, findConsumers, flowColor, flowSegments, meterPosition, powerSensorFor, proposeEnergySensors, readPower } from "./energy.ts";
 import type { Building, Room } from "./model.ts";
 import { emptyBuilding, newFloor } from "./model.ts";
 import type { HassEntity, HomeAssistant } from "./types.ts";
@@ -128,4 +128,70 @@ test("new power values re-weigh the cached cable routes", () => {
     second.map((s) => [s.a, s.b]),
     first.map((s) => [s.a, s.b]),
   );
+});
+
+test("the placed devices bring their sensors: meter = grid, inverters add up, battery with its charge", () => {
+  const b = house();
+  b.energy = { ...b.energy, meter: null, grid: null, solar: null };
+  b.floors[0].furniture.push(
+    { id: "m", type: "meter", x: 1, z: 0.2, rotation: 0, w: 0.55, d: 0.21, h: 1.1, variant: null, power: "sensor.grid" },
+    { id: "i1", type: "inverter", x: 2, z: 0.2, rotation: 0, w: 0.5, d: 0.2, h: 0.65, variant: null, power: "sensor.pv1" },
+    { id: "i2", type: "inverter", x: 3, z: 0.2, rotation: 0, w: 0.5, d: 0.2, h: 0.65, variant: null, power: "sensor.pv2" },
+    { id: "bat", type: "home_battery", x: 3, z: 1, rotation: 0, w: 0.6, d: 0.25, h: 1.1, variant: null, power: "sensor.bat", soc: "sensor.soc" },
+  );
+  assert.deepEqual(deviceSensors(b), { grid: "sensor.grid", solar: ["sensor.pv1", "sensor.pv2"], battery: "sensor.bat", soc: "sensor.soc" });
+  assert.deepEqual(meterPosition(b), { floor_id: "eg", x: 1, z: 0.2 });
+  const hass = hassWith([power("sensor.grid", "-300"), power("sensor.pv1", "800"), power("sensor.pv2", "400"), power("sensor.bat", "-250"), st("sensor.soc", "64", { device_class: "battery" }), power("sensor.house", "1000")]);
+  const s = energySummary(hass, b, []);
+  assert.equal(s.grid, -300);
+  assert.equal(s.solar, 1200);
+  assert.equal(s.battery, -250);
+  assert.equal(s.soc, 64);
+  // the balance: 1200 from the sun, 300 exported, 250 into the battery
+  assert.equal(s.consumption, 650);
+  // a house sensor beats the balance; the balance sensors beat the devices
+  b.energy.consumption = "sensor.house";
+  b.energy.solar = "sensor.pv1";
+  const s2 = energySummary(hass, b, []);
+  assert.equal(s2.consumption, 1000);
+  assert.equal(s2.solar, 800);
+});
+
+test("the energy dashboard leads to power sensors of the same devices", () => {
+  const hass = hassWith(
+    [
+      st("sensor.grid_energy", "1234", { device_class: "energy" }),
+      power("sensor.grid_power", "500"),
+      power("sensor.grid_power_l1", "200"),
+      st("sensor.pv_energy_today", "12", { device_class: "energy" }),
+      power("sensor.pv_power", "3000"),
+      st("sensor.bat_energy_in", "5", { device_class: "energy" }),
+      power("sensor.bat_power", "-100"),
+      st("sensor.bat_soc", "55", { device_class: "battery" }),
+    ],
+    Object.fromEntries(
+      (
+        [
+          ["sensor.grid_energy", "grid"],
+          ["sensor.grid_power", "grid"],
+          ["sensor.grid_power_l1", "grid"],
+          ["sensor.pv_energy_today", "pv"],
+          ["sensor.pv_power", "pv"],
+          ["sensor.bat_energy_in", "bat"],
+          ["sensor.bat_power", "bat"],
+          ["sensor.bat_soc", "bat"],
+        ] as const
+      ).map(([id, device_id]) => [id, { entity_id: id, device_id }]),
+    ),
+  );
+  const prefs = {
+    energy_sources: [
+      { type: "grid", flow_from: [{ stat_energy_from: "sensor.grid_energy" }], flow_to: [] },
+      { type: "solar", stat_energy_from: "sensor.pv_energy_today" },
+      { type: "battery", stat_energy_from: "sensor.bat_energy_in", stat_energy_to: "sensor.bat_energy_in" },
+    ],
+  };
+  assert.deepEqual(proposeEnergySensors(hass, prefs), { grid: "sensor.grid_power", solar: "sensor.pv_power", battery: "sensor.bat_power", battery_soc: "sensor.bat_soc" });
+  // nothing set up: nothing proposed
+  assert.deepEqual(proposeEnergySensors(hass, {}), {});
 });
