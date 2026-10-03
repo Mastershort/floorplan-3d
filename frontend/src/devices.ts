@@ -166,6 +166,14 @@ function registryOf(hass: HomeAssistant): Registry {
     }
     if (relevant) (areas.get(area) ?? areas.set(area, []).get(area)!).push(id);
   }
+  // entities without a registry entry (set up in YAML without a unique_id, e.g. a USB camera) have no area
+  // and would never show up: they count as unassigned
+  if (hass.entities) {
+    for (const id of Object.keys(hass.states)) {
+      if (hass.entities[id]) continue;
+      if ((isRelevant(hass, id) || isLooseSensor(hass, id)) && isPlaceable(kindOf(id))) unassigned.push(id);
+    }
+  }
   unassigned.sort((a, b) => KIND_ORDER.indexOf(kindOf(a)!) - KIND_ORDER.indexOf(kindOf(b)!) || entityName(hass, a).localeCompare(entityName(hass, b)));
   for (const [areaId, ids] of areas) {
     const areaName = hass.areas?.[areaId]?.name;

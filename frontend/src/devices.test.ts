@@ -464,3 +464,19 @@ test("a status sensor (a 3D printer) counts as active while it prints", () => {
   // an ordinary sensor is never "active"
   assert.equal(isActive(st("running", "temperature")), false);
 });
+
+test("an entity without a registry entry (a USB camera from YAML) is offered as unassigned", () => {
+  const hass = {
+    language: "de",
+    entities: { "light.a": { entity_id: "light.a", area_id: null } },
+    states: {
+      "light.a": { entity_id: "light.a", state: "on", attributes: {} },
+      "camera.usb_kamera_1": { entity_id: "camera.usb_kamera_1", state: "idle", attributes: { friendly_name: "USB Kamera 1" } },
+      "sun.sun": { entity_id: "sun.sun", state: "above_horizon", attributes: {} },
+    },
+  } as unknown as HomeAssistant;
+  const ids = unassignedEntities(hass);
+  assert.ok(ids.includes("camera.usb_kamera_1"));
+  assert.ok(ids.includes("light.a"));
+  assert.ok(!ids.includes("sun.sun"));
+});

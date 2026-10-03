@@ -4,6 +4,12 @@ All notable changes to NeonPlan 3D. The full notes in German and English are on 
 [releases page](https://github.com/Mastershort/neonplan3d/releases). Ideas and votes:
 [Discussions → Ideas](https://github.com/Mastershort/neonplan3d/discussions/categories/ideas).
 
+## 1.8.1
+
+### Fixed
+
+- Entities without a registry entry (set up in YAML without a unique ID, e.g. USB cameras) can be placed: they show up under "without area" ([#56](https://github.com/Mastershort/neonplan3d/issues/56)).
+
 ## 1.8.0
 
 ### New
