@@ -41,9 +41,9 @@ ROOM_SCHEMA = vol.Schema(
         vol.Required("floor_material"): vol.All(str, vol.Length(max=32)),
         # entities shown in the room's panel although they are not in the plan
         vol.Optional("panel", default=list): vol.All([vol.All(str, vol.Length(max=255))], vol.Length(max=100)),
-        # height of the wall on each edge (None = full floor height), aligned with the points
+        # height of the wall on each edge (None = full floor height, 0 = no wall), aligned with the points
         vol.Optional("wall_heights"): vol.All(
-            [vol.Any(None, vol.All(vol.Coerce(float), vol.Range(min=0.05, max=20)))], vol.Length(max=MAX_POINTS)
+            [vol.Any(None, vol.All(vol.Coerce(float), vol.Range(min=0, max=20)))], vol.Length(max=MAX_POINTS)
         ),
     },
     extra=vol.ALLOW_EXTRA,
@@ -378,6 +378,18 @@ SETTINGS_SCHEMA = vol.Schema(
         vol.Optional("north", default=0): vol.All(vol.Coerce(float), vol.Range(min=-360, max=360)),
         # plan lock: rooms, walls, doors, windows and outdoor areas cannot be moved by accident
         vol.Optional("lock_plan", default=False): bool,
+        # the camera the house view opens with (None = fitted from the front left)
+        vol.Optional("start_view", default=None): vol.Any(
+            None,
+            vol.Schema(
+                {
+                    vol.Required("theta"): vol.All(vol.Coerce(float), vol.Range(min=-10, max=10)),
+                    vol.Required("phi"): vol.All(vol.Coerce(float), vol.Range(min=0, max=3.2)),
+                    vol.Required("radius"): vol.All(vol.Coerce(float), vol.Range(min=1, max=500)),
+                },
+                extra=vol.ALLOW_EXTRA,
+            ),
+        ),
         vol.Optional("roof", default=lambda: {"type": "none", "pitch": 35, "overhang": 0.4}): ROOF_SCHEMA,
         # the weather entity for the weather outside (None = the first one)
         vol.Optional("weather_entity", default=None): vol.Any(None, vol.All(str, vol.Length(max=255))),

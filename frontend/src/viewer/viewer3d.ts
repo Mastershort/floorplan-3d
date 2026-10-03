@@ -524,6 +524,7 @@ export class FloorplanViewer {
   /** Heatmap colour per room id (null: normal floors). */
   private roomTint: Map<string, [number, number, number]> | null = null;
   private houseRadius = 20;
+  private startView: { theta: number; phi: number; radius: number } | null = null;
   private fpsStart = 0;
 
   constructor(host: HTMLElement, options: ViewerOptions = {}) {
@@ -1096,6 +1097,17 @@ export class FloorplanViewer {
 
   resetView(): void {
     this.fit(700);
+  }
+
+  /** The camera the house view opens with (null: fitted from the front left). */
+  setStartView(view: { theta: number; phi: number; radius: number } | null): void {
+    this.startView = view;
+  }
+
+  /** The camera as it stands: angles and distance (the target is the house). */
+  currentView(): { theta: number; phi: number; radius: number } {
+    const v = this.controls.view;
+    return { theta: v.theta, phi: v.phi, radius: v.radius };
   }
 
   dispose(): void {
@@ -2377,7 +2389,10 @@ export class FloorplanViewer {
     this.controls.maxRadius = Math.max(40, radius * 3);
     center.y = box.min.y + size.y * (this.houseView ? 0.45 : 0.3);
     if (this.floorId === null) this.houseRadius = radius;
-    this.controls.flyTo({ target: center, radius, phi: 0.85, theta: -0.6 }, duration);
+    // the house view opens as set up (from the garden side, closer …); floors and rooms keep the fitted view
+    const start = this.floorId === null ? this.startView : null;
+    if (start) this.controls.maxRadius = Math.max(this.controls.maxRadius, start.radius * 1.5);
+    this.controls.flyTo(start ? { target: center, radius: start.radius, phi: start.phi, theta: start.theta } : { target: center, radius, phi: 0.85, theta: -0.6 }, duration);
   }
 
   /** The ground grid lies under the lowest floor and reaches well beyond the building. */

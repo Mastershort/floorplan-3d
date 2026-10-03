@@ -34,6 +34,7 @@ import {
   ENERGY_DEVICES,
   DEFAULT_HOLOGRAM,
   type HologramSettings,
+  type StartView,
   FURNITURE_SIZE,
   FURNITURE_TYPES,
   canLift,
@@ -3834,9 +3835,14 @@ export class Fp3dEditor extends LitElement {
           @focusout=${off}
         >
           <span><b>${this.t("wall_n", { a: i + 1, b: ((i + 1) % n) + 1 })}</b><br /><span class="fp3d-muted">${formatNumber(this.hass, len, 2)} m</span></span>
-          ${this.num(this.t("wall_height"), h ?? H, (v) => this.setEdgeHeight(room, i, v >= H - 0.005 ? null : Math.max(0.05, v)), 0.05, 0.05)}
+          ${h === 0
+            ? html`<span class="fp3d-muted">${this.t("wall_none")}</span>`
+            : this.num(this.t("wall_height"), h ?? H, (v) => this.setEdgeHeight(room, i, v >= H - 0.005 ? null : Math.max(0.05, v)), 0.05, 0.05)}
           ${this.isAdmin && h !== null
             ? html`<button class="fp3d-btn" title=${this.t("wall_height_full")} @click=${() => this.setEdgeHeight(room, i, null)}>↥</button>`
+            : nothing}
+          ${this.isAdmin && h !== 0
+            ? html`<button class="fp3d-btn" title=${this.t("wall_none_hint")} @click=${() => this.setEdgeHeight(room, i, 0)}>${this.t("wall_none")}</button>`
             : nothing}
         </div>`;
       })}
@@ -4416,6 +4422,7 @@ export class Fp3dEditor extends LitElement {
             : floor
               ? this.renderRoomList(floor)
               : nothing}
+      ${admin ? this.renderStartView() : nothing}
       ${admin && SHOW_PRESENCE ? this.renderPresenceSettings() : nothing}
       ${floor && admin ? this.renderBackgroundForm(floor) : nothing} ${admin ? this.renderSettings() : nothing}
       ${admin ? this.renderBackup() : nothing}
@@ -4915,6 +4922,26 @@ export class Fp3dEditor extends LitElement {
       ${this._energyNote ? html`<p class="fp3d-sub">${this._energyNote}</p>` : nothing}
       <p class="fp3d-sub">${this.t("energy_hint")}</p>
     </section>`;
+  }
+
+  /** The camera the house opens with: the editor's 3D pane as it stands right now, or the default. */
+  private renderStartView() {
+    const set = this._doc.settings.start_view ?? null;
+    const remember = () => {
+      const pane = this.renderRoot.querySelector("fp3d-view3d") as (HTMLElement & { currentView(): StartView | null }) | null;
+      const v = pane?.currentView();
+      if (!v) return;
+      this.change((d) => (d.settings.start_view = { theta: round(v.theta), phi: round(v.phi), radius: round(v.radius) }));
+    };
+    return html`<details class="fp3d-section">
+      <summary>${this.t("start_view")}</summary>
+      <p class="fp3d-sub">${this.t("start_view_hint")}</p>
+      <div class="fp3d-actions">
+        <button class="fp3d-btn fp3d-primary" @click=${remember}>${this.t("start_view_set")}</button>
+        ${set ? html`<button class="fp3d-btn" @click=${() => this.change((d) => (d.settings.start_view = null))}>${this.t("start_view_reset")}</button>` : nothing}
+      </div>
+      ${set ? html`<p class="fp3d-sub">${this.t("start_view_saved")}</p>` : nothing}
+    </details>`;
   }
 
   private renderPresenceSettings() {

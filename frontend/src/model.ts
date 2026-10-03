@@ -23,7 +23,7 @@ export interface Room {
   floor_material: string;
   /** Entities shown in the room's panel although they are not in the plan. */
   panel?: string[];
-  /** Height of the wall on each edge (index = edge points[i] -> points[i + 1]); null = full floor height. */
+  /** Height of the wall on each edge (index = edge points[i] -> points[i + 1]); null = full floor height, 0 = no wall. */
   wall_heights?: (number | null)[];
 }
 
@@ -370,6 +370,15 @@ export interface BuildingSettings {
   rain_warning?: boolean;
   /** Plan lock: rooms, walls, doors, windows and outdoor areas cannot be moved by accident. */
   lock_plan?: boolean;
+  /** The camera the house view opens with (3D view, card, kiosk); null = fitted from the front left. */
+  start_view?: StartView | null;
+}
+
+/** A camera position around the house: azimuth and polar angle (radians) and the distance (m). */
+export interface StartView {
+  theta: number;
+  phi: number;
+  radius: number;
 }
 
 /**

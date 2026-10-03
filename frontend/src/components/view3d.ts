@@ -168,6 +168,8 @@ export class Fp3dView3d extends LitElement {
   private holoTimer: ReturnType<typeof setInterval> | undefined;
   private holoEl: HTMLElement | null = null;
   private holoIds = "";
+  /** The start view last handed to the viewer (JSON), to notice a new one. */
+  private shownStartView: string | undefined;
   /** A running swipe on a lamp or blind: the value shown next to the finger. */
   private declare _swipe: { entity: string; kind: "light" | "cover"; start: number; value: number; x: number; y: number } | null;
   /** Quick menu at a device (long press). */
@@ -384,7 +386,11 @@ export class Fp3dView3d extends LitElement {
       this._low = this.viewer.low;
       this.viewer.setPacks([...getPacks()]);
       this.shownPacks = packsVersion();
-      if (this.building) this.viewer.setBuilding(this.building);
+      if (this.building) {
+        this.shownStartView = JSON.stringify(this.building.settings.start_view ?? null);
+        this.viewer.setStartView(this.building.settings.start_view ?? null);
+        this.viewer.setBuilding(this.building);
+      }
       this.scheduleThumbs();
       this.syncDevices(true);
       this.viewer.setFloor(this.floorId, false);
@@ -413,7 +419,15 @@ export class Fp3dView3d extends LitElement {
       // a feature pack may have arrived with them (Energie Pro): the cables and modules follow
       this.syncDevices(true);
     }
-    if (changed.has("building") && this.building) v.setBuilding(this.building);
+    if (changed.has("building") && this.building) {
+      // a new start view (just remembered in the editor) shows right away in the house view
+      const start = JSON.stringify(this.building.settings.start_view ?? null);
+      const startChanged = this.shownStartView !== undefined && this.shownStartView !== start;
+      this.shownStartView = start;
+      v.setStartView(this.building.settings.start_view ?? null);
+      v.setBuilding(this.building);
+      if (startChanged && this.floorId === null) v.resetView();
+    }
     if (changed.has("building") || changed.has("theme") || changed.has("floorThumbs") || changed.has("packs")) this.scheduleThumbs();
     const forced = ["building", "markerMode", "heatMode", "flows", "alerts", "dimmed"].some((k) => changed.has(k));
     if (forced || changed.has("hass")) this.syncDevices(forced);
@@ -1514,6 +1528,11 @@ export class Fp3dView3d extends LitElement {
       if (this.confirmSet.has(entityId) && !confirm(translate(this.hass, "confirm_switch", { name: entityName(this.hass, entityId) }))) return;
       void toggleEntity(this.hass, entityId);
     } else openMoreInfo(this, entityId);
+  }
+
+  /** The camera as it stands (for "remember this view as the start"). */
+  currentView(): { theta: number; phi: number; radius: number } | null {
+    return this.viewer?.currentView() ?? null;
   }
 
   resetView(): void {

@@ -172,6 +172,8 @@ export function generateWalls(rooms: readonly Room[], options: WallOptions, free
       .filter((h): h is number => typeof h === "number" && h > 0);
     return hs.length ? Math.min(...hs) : undefined;
   };
+  // a height of 0 on an edge: no wall there at all (an open floor plan whose rooms share one space)
+  const noWall = (list: Segment[]): boolean => list.some((s) => rooms.find((r) => r.id === s.room)?.wall_heights?.[s.edge] === 0);
   let drafts: Draft[] = [];
   for (const g of groups.values()) {
     const first = g[0];
@@ -179,6 +181,7 @@ export function generateWalls(rooms: readonly Room[], options: WallOptions, free
     for (const s of g) {
       if (s !== first && s !== partner && s.room !== first.room) warnings.push(`overlap:${first.room}:${s.room}`);
     }
+    if (noWall(partner ? [first, partner] : [first])) continue;
     if (partner) {
       drafts.push({
         a: first.u,

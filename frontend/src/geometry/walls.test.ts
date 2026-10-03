@@ -172,3 +172,13 @@ test("an opening in a free wall is located on that wall, with its room side on t
   const edgeHost = openingHost({ room_id: "a", edge: 0 }, rooms, free);
   assert.ok(edgeHost && locateOpening(walls, { offset: 1 }, edgeHost));
 });
+
+test("a wall height of 0 leaves the wall out: two rooms share one open space", () => {
+  const room = (id: string, x0: number, x1: number, wall_heights?: (number | null)[]) => ({ id, name: id, area_id: null, points: [[x0, 0], [x1, 0], [x1, 3], [x0, 3]] as [number, number][], floor_material: "wood", wall_heights });
+  const closed = generateWalls([room("a", 0, 4), room("b", 4, 8)], { exterior: 0.24, interior: 0.12 }).walls;
+  assert.ok(closed.some((w) => !w.exterior && w.roomLeft && w.roomRight), "the shared wall is there");
+  // edge 1 of room a runs from (4,0) to (4,3): the shared one
+  const open = generateWalls([room("a", 0, 4, [null, 0, null, null]), room("b", 4, 8)], { exterior: 0.24, interior: 0.12 }).walls;
+  assert.ok(!open.some((w) => !w.exterior && w.roomLeft && w.roomRight), "no shared wall");
+  assert.equal(open.filter((w) => w.exterior).length, closed.filter((w) => w.exterior).length);
+});

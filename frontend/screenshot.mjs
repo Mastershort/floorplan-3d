@@ -140,6 +140,8 @@ const shots = [
   // Energie Pro: the cables from the roof to the inverter, battery, meter, wallbox and grid with their moving dots
   { name: "view-flows", query: "?flows", width: 1280, height: 800, editor: true, editorScript: "e.fit();", then3d: "Alle Etagen", then3dAlso: ["Gestapelt"], camera: { theta: 0.6, phi: 1.15, radius: 22 } },
   { name: "view-flows-garage", query: "?flows", width: 1280, height: 800, editor: true, editorScript: "e.fit();", then3d: "Alle Etagen", then3dAlso: ["Gestapelt"], camera: { theta: 3.6, phi: 1.2, radius: 16 } },
+  { name: "view-open-plan", query: "", width: 1280, height: 800, editor: true, editorScript: "const r = e._doc.floors[0].rooms.find((x) => x.id === 'kueche'); r.wall_heights = r.points.map(() => 0); e.setDoc(structuredClone(e._doc));", then3d: "Erdgeschoss" },
+  { name: "view-start-view", query: "", width: 1280, height: 800, editor: true, editorScript: "e.change((d) => (d.settings.start_view = { theta: 2.4, phi: 1.0, radius: 26 }));", then3d: "Alle Etagen" },
   { name: "editor-cables", query: "?flows", width: 1500, height: 1000, editor: true, editorScript: "e._tool = 'energy'; e._floorId = 'eg'; e._solarId = null; setTimeout(() => { e.layCable('inv:' + e._doc.floors[0].furniture.find((m) => m.type === 'inverter').id); e.fit(); }, 400);", afterWait: 1800, scrollSide: true },
   { name: "view-solar-live", query: "?flows&pv=5400", width: 1280, height: 800, editor: true, editorScript: "e.fit();", then3d: "Alle Etagen", then3dAlso: ["Gestapelt"], camera: { theta: 1.1, phi: 0.9, radius: 26 } },
   { name: "view-flows-eg", query: "?flows", width: 1280, height: 800, editor: true, editorScript: "e.fit();", then3d: "Erdgeschoss", camera: { theta: 0.25, phi: 1.2, radius: 11 } },
@@ -342,6 +344,18 @@ for (const shot of shots.filter((s) => !only || only.includes(s.name))) {
           viewer.invalidate();
         }, shot.camera);
         await new Promise((r) => setTimeout(r, 1500));
+      }
+      // DEBUG_VIEW="<code using v>" prints what the panel's 3D view says after the switch
+      if (process.env.DEBUG_VIEW) {
+        const out = await page.evaluate((code) => {
+          const v = document.querySelector("neonplan3d-panel").shadowRoot.querySelector("fp3d-view3d");
+          try {
+            return String(new Function("v", "return " + code)(v));
+          } catch (err) {
+            return "ERROR " + err.message;
+          }
+        }, process.env.DEBUG_VIEW);
+        console.log("DEBUG_VIEW", out);
       }
     }
   }
